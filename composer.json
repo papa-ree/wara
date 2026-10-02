@@ -1,0 +1,43 @@
+{
+    "name": "bale/wara",
+    "description": "WhatsApp gateway wrapper (GOWA) untuk ekosistem Bale",
+    "keywords": [
+        "Bale",
+        "laravel",
+        "whatsapp",
+        "gateway"
+    ],
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "bale/core": "*",
+        "illuminate/contracts": "^11.0||^12.0||^13.0",
+        "illuminate/http": "^11.0||^12.0||^13.0",
+        "illuminate/support": "^11.0||^12.0||^13.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Bale\\Wara\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Bale\\Wara\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Bale\\Wara\\WaraServiceProvider"
+            ],
+            "aliases": {
+                "Wara": "Bale\\Wara\\Facades\\Wara"
+            }
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

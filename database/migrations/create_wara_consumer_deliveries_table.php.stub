@@ -1,0 +1,44 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Status pengiriman event webhook ke aplikasi consumer (fan-out, PRD §7.1a & §12).
+ *
+ * Primary key UUID, dengan unique index pada (consumer, delivery_id)
+ * untuk memastikan idempotensi retry.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('wara_consumer_deliveries', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+
+            $table->string('consumer', 64);
+            $table->string('delivery_id', 64);
+
+            $table->string('event', 64)->nullable();
+            $table->string('device_id', 191)->nullable();
+            $table->string('message_id', 191)->nullable();
+
+            $table->enum('status', ['queued', 'sending', 'sent', 'failed'])->default('queued');
+            $table->unsignedSmallInteger('attempts')->default(0);
+            $table->smallInteger('status_code')->nullable();
+            $table->text('last_error')->nullable();
+            $table->timestamp('delivered_at')->nullable();
+
+            $table->timestamps();
+
+            $table->index(['consumer', 'status']);
+            $table->unique(['consumer', 'delivery_id']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('wara_consumer_deliveries');
+    }
+};

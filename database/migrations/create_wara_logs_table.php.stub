@@ -1,0 +1,60 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Log pesan masuk dan keluar. Lihat docs/wara/PRD.md §7.
+ *
+ * Primary key memakai UUID, konsisten dengan bale/frasasti dan bale/bale-cms.
+ *
+ * `phone` dan `body` dienkripsi lewat cast `encrypted` — sama seperti
+ * `wa_number` pada Aduan. Karena ciphertext bersifat acak:
+ *   - keduanya tidak di-index
+ *   - keduanya tidak bisa dicari dengan LIKE
+ *   - keduanya tidak bisa dipakai sebagai filter `activeFilters`
+ * Kolom `direction`, `device_id`, `status`, dan `message_id` sengaja dibiarkan
+ * plaintext supaya tetap bisa disaring dan dicari.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('wara_logs', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+
+            $table->enum('direction', ['in', 'out']);
+
+            $table->string('event')->nullable();
+
+            // Session ID device yang mengirim/menerima.
+            $table->string('device_id', 191)->nullable()->index();
+
+            $table->string('chat_id', 191)->nullable();
+
+            $table->string('message_id', 191)->nullable()->index();
+
+            $table->string('status')->nullable();
+
+            // Konteks khusus pacing & anti-ban (PRD §8.2).
+            $table->string('session_key')->nullable()->index();
+            $table->unsignedSmallInteger('attempt')->nullable();
+
+            $table->timestamps();
+
+            $table->index(['direction', 'created_at']);
+
+            // Terenkripsi — lihat catatan di atas. TEXT karena ciphertext
+            // jauh lebih panjang dari nilai aslinya.
+            // Jangan simpan media binary — path/URL saja (PRD §7).
+            $table->text('phone')->nullable();
+            $table->text('body')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('wara_logs');
+    }
+};

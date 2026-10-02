@@ -1,0 +1,33 @@
+# ==============================================================================
+# bale/wara — .gitignore
+#
+# Repo ini berdiri sendiri; `.gitignore` direktori induk tidak berlaku di sini.
+# Parent `bale-dev` meng-ignore `/packages`, jadi apa pun yang tidak ikut
+# ter-commit parent HARUS ikut ter-commit repo ini. Kalau tidak, kode hilang
+# tanpa jejak.
+# ==============================================================================
+
+# --- Dependency ---
+# `packages/wara` tidak punya vendor sendiri - ia memakai vendor dari parent.
+# Kalau nanti `composer install` dijalankan di dalam package, jangan ikut.
+/vendor/
+
+# --- Rahasia / konfigurasi lokal ---------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Artefak test -----------------------------------------------------------
+.phpunit.cache/
+.phpunit.result.cache
+testbench.yaml
+workbench/
+
+# --- OS / editor ------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
