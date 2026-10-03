@@ -6,6 +6,7 @@ use Bale\Wara\Contracts\WaraGateway;
 use Bale\Wara\Events\WaraIncomingMessage;
 use Bale\Wara\Jobs\DeliverToConsumer;
 use Bale\Wara\Models\WaraLog;
+use Bale\Wara\Models\WaraSession;
 use Bale\Wara\Support\ConsumerConfig;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -41,7 +42,8 @@ class WebhookController
 
         $payload = $request->json()->all();
         $event = (string) ($payload['event'] ?? '');
-        $deviceId = $this->stringOrNull($payload['device_id'] ?? null);
+        $rawDeviceId = $this->stringOrNull($payload['device_id'] ?? null);
+        $deviceId = $this->resolveDeviceId($gateway, $rawDeviceId);
         $data = is_array($payload['payload'] ?? null) ? $payload['payload'] : [];
 
         $logged = match ($event) {
@@ -134,6 +136,46 @@ class WebhookController
         }
 
         return $this->stringOrNull($data['created_at'] ?? null);
+    }
+
+    /**
+     * 🔴 Samakan identitas device untuk pesan MASUK.
+     *
+     * Untuk pesan keluar kita sendiri yang memilih device, jadi `device_id`
+     * yang kita tulis sudah benar (nama device, mis. `wago prod`).
+     *
+     * Untuk pesan masuk, GOWA mengisi `device_id` dengan JID akun yang
+     * MENERIMA pesan. Itu membuat kolom `wara_logs.device_id` berarti dua hal
+     * berbeda tergantung arah, sehingga query "pesan masuk untuk device X"
+     * selalu salah: `device_id` tidak pernah sama dengan
+     * `wara_sessions.device_id`.
+     *
+     * Terbukti di data: 761 baris inbound memakai JID, sementara
+     * `wara_sessions.device_id` berisi nama device. Keduanya sebenarnya
+     * pasangan yang sama, tapi tidak ada yang mengetahuinya.
+     *
+     * `wara_sessions.jid` menyimpan nomor device itu, jadi JID bisa dipetakan
+     * balik ke nama device. Kalau tidak ada device yang cocok, hasilnya `null` -
+     * lebih baik kosong daripada menyimpan identitas palsukan yang tidak akan
+     * pernah cocok dengan tabel mana pun.
+     *
+     * Bentuk JID adalah detail gateway, jadi mengenali JID TIDAK ditulis di
+     * sini; kita bertanya ke gateway lewat kontrak.
+     */
+    protected function resolveDeviceId(WaraGateway $gateway, ?string $rawDeviceId): ?string
+    {
+        if ($rawDeviceId === null || $rawDeviceId === '') {
+            return null;
+        }
+
+        if (! $gateway->isDeviceJid($rawDeviceId)) {
+            // Sudah nama device (outbound, atau gateway yang mengirim nama).
+            return $rawDeviceId;
+        }
+
+        return WaraSession::query()
+            ->where('jid', $rawDeviceId)
+            ->value('device_id');
     }
 
     /**

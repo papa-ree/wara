@@ -35,6 +35,19 @@ interface WaraGateway
     public function sendText(string $deviceId, string $phone, string $text): SendResult;
 
     /**
+     * Apakah nilai ini adalah JID akun device, bukan nama device.
+     *
+     * 🔴 Ini satu-satunya cara yang sah untuk mengenali JID di luar adapter.
+     * Bentuk JID adalah detail gateway (PRD §11.2), jadi manager dan
+     * controller tidak boleh menyebut sufiksnya sendiri - mereka bertanya ke
+     * gateway.
+     *
+     * Ini penting karena gateway mengisi `device_id` pada webhook pesan masuk
+     * dengan JID, sementara kita memakai nama device sebagai identitas.
+     */
+    public function isDeviceJid(string $value): bool;
+
+    /**
      * Daftar katalog device, sudah dinormalisasi ke model internal.
      */
     public function listDevices(): DeviceList;

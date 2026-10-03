@@ -56,6 +56,21 @@ class GowaGateway implements WaraGateway
         );
     }
 
+    /**
+     * Apakah nilai ini JID akun device milik GOWA?
+     *
+     * Polanya sengaja sempit: JID device selalu `<digit>@s.whatsapp.net`.
+     * Longgarkan dan nama device yang kebetulan mengandung `@` akan salah
+     * dikira JID - dan akibatnya `wara_logs.device_id` storing identitas yang
+     * tidak cocok dengan tabel mana pun.
+     *
+     * `@c.us` sengaja TIDAK termasuk: itu bentuk kontak, bukan device.
+     */
+    public function isDeviceJid(string $value): bool
+    {
+        return (bool) preg_match('/^\d{8,15}'.preg_quote(self::JID_SUFFIX, '/').'$/', $value);
+    }
+
     public function listDevices(): DeviceList
     {
         $response = $this->request()->get('/devices');
