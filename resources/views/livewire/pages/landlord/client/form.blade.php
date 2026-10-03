@@ -53,6 +53,32 @@
                 </div>
             </div>
 
+            {{-- 🔴 Hanya untuk client tipe `token`. Client token tanpa api
+                 token akan menolak SEMUA request dengan 403 yang tidak bisa
+                 dibaca pemanggil, jadi ikatannya harus di form ini. --}}
+            @if ($type === \Bale\Wara\Models\WaraClient::TYPE_TOKEN)
+                <div class="mt-4">
+                    <label for="apiTokenId" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ __('API Token') }}
+                    </label>
+                    <select id="apiTokenId" wire:model="apiTokenId"
+                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="">{{ __('— belum dipilih —') }}</option>
+                        @foreach ($apiTokens as $token)
+                            <option value="{{ $token['id'] }}" @disabled(! $token['available'])>
+                                {{ $token['label'] }}
+                            </option>
+                        @endforeach
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ __('Token yang sudah dipakai client lain tidak bisa dipilih lagi - satu token hanya boleh memetakan ke satu client.') }}
+                    </p>
+                    @error('apiTokenId')
+                        <p class="mt-1 text-sm text-red-600">{{ $message }}</p>
+                    @enderror
+                </div>
+            @endif
+
             <label class="mt-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                 <input type="checkbox" wire:model="is_active"
                     class="rounded border-gray-300 text-indigo-600 dark:border-gray-700 dark:bg-gray-800">
@@ -63,6 +89,20 @@
                     </span>
                 </span>
             </label>
+
+            {{-- Diagnosis: apa yang MASIH menghalangi client ini melayani
+                 traffic. Bedanya dengan peringatan di atas: yang ini kondisi
+                 nyata dari database, bukan penjelasan umum. --}}
+            @if ($client?->exists && $client->blockingReadinessIssues() !== [])
+                <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+                    <p class="font-medium">{{ __('Client ini belum bisa melayani traffic:') }}</p>
+                    <ul class="mt-1 list-inside list-disc space-y-0.5">
+                        @foreach ($client->blockingReadinessIssues() as $issue)
+                            <li>{{ $issue['message'] }}</li>
+                        @endforeach
+                    </ul>
+                </div>
+            @endif
         </div>
 
         {{-- Route: purpose -> device --}}
