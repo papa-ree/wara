@@ -1,5 +1,7 @@
 <?php
 
+use Bale\Wara\Livewire\Pages\Landlord\Client\Form as ClientForm;
+use Bale\Wara\Livewire\Pages\Landlord\Client\Index as ClientIndex;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Form;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Index;
 use Bale\Wara\Livewire\Pages\Landlord\Log\Index as LogIndex;
@@ -17,6 +19,18 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::middleware(['web', 'auth'])->prefix('wara')->name('wara.')->group(function () {
+    Route::get('/client', ClientIndex::class)
+        ->name('client.index')
+        ->middleware('can:wara.client.read');
+
+    Route::get('/client/create', ClientForm::class)
+        ->name('client.create')
+        ->middleware('can:wara.client.update');
+
+    Route::get('/client/{client}/edit', ClientForm::class)
+        ->name('client.edit')
+        ->middleware('can:wara.client.update');
+
     Route::get('/device', Index::class)
         ->name('device.index')
         ->middleware('can:wara.device.read');

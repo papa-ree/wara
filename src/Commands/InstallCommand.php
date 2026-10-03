@@ -18,7 +18,9 @@ class InstallCommand extends Command
     {
         $permissions = [
             'wara.device.read' => 'Membaca katalog device WhatsApp.',
-            'wara.device.update' => 'Menugaskan purpose device WhatsApp.',
+            'wara.device.update' => 'Menguji koneksi dan menyegarkan status device WhatsApp.',
+            'wara.client.read' => 'Membaca daftar client Wara dan peta purpose ke device.',
+            'wara.client.update' => 'Membuat client, memetakan purpose ke device, dan mengelola endpoint webhook.',
             'wara.log.read' => 'Membaca riwayat pesan WhatsApp. Halaman ini read-only.',
             'wara.status.read' => 'Membaca halaman status bale/wara. Halaman ini read-only.',
         ];
