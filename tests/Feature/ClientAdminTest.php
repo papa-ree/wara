@@ -1,8 +1,10 @@
 <?php
 
 use App\Models\User;
+use Bale\Api\Services\TokenManager;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Form as ClientForm;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Index as ClientIndex;
+use Bale\Wara\Livewire\Pages\Landlord\Client\Section\ClientTable;
 use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
@@ -76,9 +78,12 @@ describe('daftar client', function () {
 
         $route->fill(['outbound_enabled' => false])->save();
 
+        // Label route yang outbound-nya mati ada di `sr-only` (untuk pembaca layar)
+        // plus tanda `×` yang terlihat. Selector teks alone tidak bisa
+        // membedakan keduanya, jadi yang diperiksa labelnya.
         Livewire::actingAs($this->user)
             ->test(ClientIndex::class)
-            ->assertSee('(kirim mati)');
+            ->assertSee('kirim mati');
     });
 
     it('menolak akses tanpa permission', function () {
@@ -92,11 +97,13 @@ describe('daftar client', function () {
 describe('form client: peta purpose ke device', function () {
     it('🔴 membuat client beserta route-nya', function () {
         $device = deviceForClientUiTest('ui_dev_3');
+        $token = app(TokenManager::class)->issue('Client baru');
 
         Livewire::actingAs($this->user)
             ->test(ClientForm::class)
             ->set('name', 'Client baru')
             ->set('type', WaraClient::TYPE_TOKEN)
+            ->set('apiTokenId', $token['model']->getKey())
             ->call('addRoute')
             ->set('routes.0.purpose', 'notifikasi')
             ->set('routes.0.device_id', $device->device_id)
@@ -346,5 +353,219 @@ describe('form client: endpoint webhook', function () {
             ->call('removeEndpoint', $endpointLain->getKey());
 
         expect(WaraWebhookEndpoint::query()->whereKey($endpointLain->getKey())->exists())->toBeTrue();
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| Test yang ditambahkan saat UI client dibangun ulang
+|--------------------------------------------------------------------------
+|
+| Semua ini menguji perilaku yang TIDAK ada sebelumnya: hapus client, ikat
+| api token, dan diagnosis kesiapan. Tiga hal itu adalah tempat paling rawan
+| gagal diam-diam, jadi masing-masing punya test sendiri.
+|
+*/
+
+describe('hapus client', function () {
+    beforeEach(function () {
+        // 🔴 Permission HARUS di-grant ke user, bukan cuma dibuat.
+        //
+        // `beforeEach` luar sudah selesai sebelum blok ini jalan, jadi
+        // `givePermissionTo()` di sana tidak mungkin tahu permission ini ada.
+        // Kalau hanya `firstOrCreate`, `performDelete()` menolak dengan
+        // Forbidden, dan test "menghapus client" gagal dengan pesan yang
+        // menyesatkan: data tidak terhapus, padahal penyebabnya permission.
+        Permission::firstOrCreate(['name' => 'wara.client.delete'], ['guard_name' => 'web']);
+        $this->user->givePermissionTo('wara.client.delete');
+    });
+
+    it('🔴 menghapus client beserta route dan endpoint-nya', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE, 'name' => 'Client dihapus', 'is_active' => true,
+        ]);
+
+        (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'notifikasi',
+            'device_id' => deviceForClientUiTest('del_dev_1')->device_id,
+        ])->save();
+
+        $endpoint = new WaraWebhookEndpoint;
+        $endpoint->forceFill(['client_id' => $client->getKey(), 'url' => 'https://dihapus.test/hook']);
+        $endpoint->forceFill(['secret' => 'secret-yang-cukup-panjang-32-karakter']);
+        $endpoint->save();
+
+        Livewire::actingAs($this->user)
+            ->test(ClientTable::class)
+            ->call('deleteItem', $client->getKey());
+
+        expect(WaraClient::query()->whereKey($client->getKey())->exists())->toBeFalse()
+            ->and(WaraRoute::query()->where('client_id', $client->getKey())->exists())->toBeFalse()
+            ->and(WaraWebhookEndpoint::query()->where('client_id', $client->getKey())->exists())->toBeFalse();
+    });
+
+    it('🔴 TIDAK menghapus client yang tidak ada, dan tidak melempar error', function () {
+        Livewire::actingAs($this->user)
+            ->test(ClientTable::class)
+            ->call('deleteItem', '00000000-0000-4000-8000-000000000000');
+
+        expect(WaraClient::query()->count())->toBe(0);
+    });
+
+    it('🔴 menolak hapus tanpa permission delete', function () {
+        // Permission-nya dicabut dari user, bukan hanya tidak pernah diberikan.
+        // Kalau hanya tidak diberikan, test ini lulus karena alasan yang salah:
+        // dia lulus di `beforeEach` luar yang tidak menyentuh permission ini.
+        $this->user->revokePermissionTo('wara.client.delete');
+        $this->user->refresh();
+
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE, 'name' => 'Dilindungi', 'is_active' => true,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(ClientTable::class)
+            ->call('deleteItem', $client->getKey())
+            ->assertForbidden();
+
+        expect(WaraClient::query()->whereKey($client->getKey())->exists())->toBeTrue();
+    });
+});
+
+describe('form client: ikat api token', function () {
+    it('🔴 menolak client tipe token tanpa api token', function () {
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'Tanpa token')
+            ->set('type', WaraClient::TYPE_TOKEN)
+            ->call('save')
+            ->assertHasErrors('apiTokenId');
+
+        expect(WaraClient::query()->where('name', 'Tanpa token')->exists())->toBeFalse();
+    });
+
+    it('🔴 menyimpan api_token_id untuk client tipe token', function () {
+        $token = app(TokenManager::class)->issue('Token untuk client');
+
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'Client bertoken')
+            ->set('type', WaraClient::TYPE_TOKEN)
+            ->set('apiTokenId', $token['model']->getKey())
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $client = WaraClient::query()->where('name', 'Client bertoken')->firstOrFail();
+
+        expect($client->api_token_id)->toBe($token['model']->getKey())
+            ->and($client->isUsable())->toBeTrue();
+    });
+
+    it('🔴 menolak api token yang sudah dipakai client lain', function () {
+        $token = app(TokenManager::class)->issue('Token terpakai');
+
+        $pemilik = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN, 'name' => 'Pemilik token', 'is_active' => true,
+        ]);
+        $pemilik->forceFill(['api_token_id' => $token['model']->getKey()])->save();
+
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'Client pencuri token')
+            ->set('type', WaraClient::TYPE_TOKEN)
+            ->set('apiTokenId', $token['model']->getKey())
+            ->call('save')
+            ->assertHasErrors('apiTokenId');
+
+        expect($pemilik->fresh()->api_token_id)->toBe($token['model']->getKey());
+    });
+
+    it('🔴 membolehkan client menyimpan ulang token miliknya sendiri', function () {
+        // 🔴 Regresi: kalau client yang sedang diedit ikut di daftar
+        // "dipakai client lain", form menolak nilai yang tidak berubah
+        // sama sekali dan client tidak bisa disimpan tanpa alasan.
+        $token = app(TokenManager::class)->issue('Token milik sendiri');
+
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN, 'name' => 'Client lama', 'is_active' => true,
+        ]);
+        $client->forceFill(['api_token_id' => $token['model']->getKey()])->save();
+
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class, ['client' => $client])
+            ->set('name', 'Client lama dirapikan')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        expect($client->fresh()->name)->toBe('Client lama dirapikan')
+            ->and($client->fresh()->api_token_id)->toBe($token['model']->getKey());
+    });
+
+    it('🔴 Membersihkan api_token_id saat tipe diubah ke service', function () {
+        // 🔴 Kalau tidak dibersihkan, `DeviceRouter::clientForApiTokenId()`
+        // masih memetakan token itu ke client service, dan request dari
+        // token tersebut mendarat ke client yang tidak memakainya.
+        $token = app(TokenManager::class)->issue('Token tidak relevan');
+
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN, 'name' => 'Turun kelas', 'is_active' => true,
+        ]);
+        $client->forceFill(['api_token_id' => $token['model']->getKey()])->save();
+
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class, ['client' => $client])
+            ->set('type', WaraClient::TYPE_SERVICE)
+            ->call('save')
+            ->assertHasNoErrors();
+
+        expect($client->fresh()->api_token_id)->toBeNull();
+    });
+});
+
+describe('diagnosis kesiapan client', function () {
+    it('🔴 menandai client token tanpa token sebagai belum bisa melayani traffic', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN, 'name' => 'Belum diikat', 'is_active' => true,
+        ]);
+
+        $issues = $client->blockingReadinessIssues();
+
+        expect($issues)->toHaveCount(1)
+            ->and($issues[0]['key'])->toBe('api_token_id')
+            ->and($client->isUsable())->toBeFalse()
+            ->and($client->readinessState())->toBe('unbound');
+    });
+
+    it('🔴 client service tanpa route TIDAK dianggap masalah', function () {
+        // 🔴 "Belum dipetakan" adalah kondisi yang normal dan disengaja -
+        // client baru memang belum punya route. Menandainya sebagai masalah
+        // akan mendorong admin memperbaiki sesuatu yang tidak salah.
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE, 'name' => 'Sudah sah', 'is_active' => true,
+        ]);
+
+        expect($client->blockingReadinessIssues())->toBe([])
+            ->and($client->isUsable())->toBeTrue()
+            ->and($client->readinessState())->toBe('ready');
+    });
+
+    it('🔴 client nonaktif dilaporkan tidak aktif, bukan unbound', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN, 'name' => 'Nonaktif', 'is_active' => false,
+        ]);
+
+        expect($client->blockingReadinessIssues()[0]['key'])->toBe('is_active')
+            ->and($client->readinessState())->toBe('inactive');
+    });
+
+    it('🔴 halaman daftar menampilkan diagnosis untuk client yang perlu perhatian', function () {
+        WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN, 'name' => 'Perlu perhatian', 'is_active' => true,
+        ]);
+
+        Livewire::actingAs($this->user)
+            ->test(ClientIndex::class)
+            ->assertSee('perlu perhatian');
     });
 });

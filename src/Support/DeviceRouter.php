@@ -100,7 +100,16 @@ final class DeviceRouter
     }
 
     /**
-     * Client yang diwakili oleh nilai `bale_id` (organisasi penyewa).
+     * 🔴 Client yang diwakili oleh nilai `bale_id` (organisasi penyewa).
+     *
+     * Method ini TIDAK dipakai `SendClientResolver` dan itu disengaja.
+     *
+     * Client yang tercatat di satu organisasi bisa banyak: satu instansi bisa
+     * punya client `token`, `service`, dan `tenant` sekaligus. Kalau pencarian
+     * client dibiarkan lewat organisasi, `POST /send` akan mendarat di client
+     * PERTAMA yang cocok - bisa jadi bukan yang pemilik token itu. Pemetaan
+     * harus 1 token : 1 client, jadi jalur ini hanya untuk keperluan
+     * pelaporan, bukan untuk resolusi request.
      */
     public function clientForBaleId(string $baleId): ?WaraClient
     {

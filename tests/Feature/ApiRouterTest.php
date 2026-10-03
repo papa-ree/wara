@@ -112,6 +112,42 @@ describe('POST /api/v1/wara/send', function () {
         Http::assertNothingSent();
     });
 
+    it('🔴 menolak token yang organisasinya punya client LAIN', function () {
+        // 🔴 Regresi untuk penghapusan `api_tokens.bale_id`.
+        //
+        // Resolver dulu punya cabang kedua: token yang tidak terikat
+        // `api_token_id` akan mencari client lewat `bale_id` tokennya. Kalau
+        // cabang itu masih ada, satu token bisa mendarat di client milik
+        // organisasi yang sama meskipun client itu tidak pernah menunjuk
+        // token ini - persis kebalikan dari alasan `wara_clients` ada.
+        $issued = app(TokenManager::class)->issue('Token tanpa client', ['wara.send']);
+
+        $session = sessionForApiTest(['device_id' => 'dev-organisasi']);
+
+        $clientLain = new WaraClient;
+        $clientLain->forceFill([
+            'type' => WaraClient::TYPE_TOKEN,
+            'bale_id' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            'api_token_id' => app(TokenManager::class)->issue('Token lain')['model']->getKey(),
+            'name' => 'Client organisasi lain',
+            'is_active' => true,
+        ])->save();
+
+        (new WaraRoute)->forceFill([
+            'client_id' => $clientLain->getKey(),
+            'purpose' => 'notifikasi',
+            'device_id' => $session->device_id,
+        ])->save();
+
+        $this->postJson('/api/v1/wara/send', [
+            'to' => '08123456789',
+            'message' => 'halo',
+        ], ['Authorization' => 'Bearer '.$issued['plain']])
+            ->assertForbidden();
+
+        Http::assertNothingSent();
+    });
+
     it('🔴 menolak client yang dinonaktifkan walau route-nya ada', function () {
         $ctx = clientWithTokenApiTest();
         $ctx['client']->forceFill(['is_active' => false])->save();

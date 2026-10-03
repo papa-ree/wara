@@ -201,10 +201,17 @@ describe('indeks dan kolom tabel', function () {
             ->and(Schema::hasColumn('wara_clients', 'api_token_id'))->toBeTrue();
     });
 
-    it('api_tokens punya bale_id supaya token bisa dipetakan ke client', function () {
-        // 🔴 Tanpa kolom ini router tidak mungkin bekerja: `POST /send` tidak
-        // punya cara tahu pemanggilnya client mana.
-        expect(Schema::hasColumn('api_tokens', 'bale_id'))->toBeTrue();
+    it('api_tokens TIDAK punya bale_id, dan wara_clients yang memegangnya', function () {
+        // 🔴 Kolom ini pernah ada di `api_tokens` lalu dicabut.
+        //
+        // `api_tokens` milik `bale/api` dan `bale_lists` milik `bale/cms`.
+        // Meletakkan `bale_id` di token berarti `bale/api` terikat ke CMS - dan
+        // token yang diberikan ke sistem di luar Bale tidak punya `bale_lists`
+        // sama sekali. Identitas "token ini milik aplikasi siapa" tetap ada,
+        // tapi di tempat yang benar: `wara_clients`.
+        expect(Schema::hasColumn('api_tokens', 'bale_id'))->toBeFalse()
+            ->and(Schema::hasColumn('wara_clients', 'bale_id'))->toBeTrue()
+            ->and(Schema::hasColumn('wara_clients', 'api_token_id'))->toBeTrue();
     });
 
     it('wara_webhook_endpoints punya secret yang wajib ada', function () {

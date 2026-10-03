@@ -9,6 +9,8 @@ use Bale\Wara\Models\WaraSession;
 use Bale\Wara\Models\WaraWebhookEndpoint;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Collection;
+use Illuminate\Validation\Rule;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -50,6 +52,16 @@ class Form extends Component
     /** Device yang tersedia untuk dipetakan. */
     public array $devices = [];
 
+    /**
+     * 🔴 `api_token_id` milik client TIDAK ada di `$fillable` model dan tidak
+     * boleh masuk dari form biasa. Field ini tetap bisa diisi lewat form, tapi
+     * hanya lewat jalur yang eksplisit di bawah ini, bukan lewat `fill()`.
+     */
+    public ?string $apiTokenId = null;
+
+    /** Token yang bisa dipilih, untuk client tipe `token`. */
+    public array $apiTokens = [];
+
     public bool $showEndpointForm = false;
 
     public ?string $endpointUrl = null;
@@ -65,6 +77,8 @@ class Form extends Component
         $this->authorize('wara.client.update');
 
         $this->client = $client?->exists ? $client : null;
+
+        $this->apiTokens = $this->loadApiTokens();
 
         $this->devices = WaraSession::query()
             ->orderBy('display_name')
@@ -86,6 +100,7 @@ class Form extends Component
         $this->name = (string) $this->client->name;
         $this->type = (string) $this->client->type;
         $this->is_active = (bool) $this->client->is_active;
+        $this->apiTokenId = $this->client->api_token_id;
 
         $this->routes = $this->client->routes()
             ->orderBy('purpose')
@@ -120,8 +135,96 @@ class Form extends Component
         $this->name = '';
         $this->type = WaraClient::TYPE_SERVICE;
         $this->is_active = true;
+        $this->apiTokenId = null;
         $this->routes = [];
         $this->resetEndpointForm();
+    }
+
+    /**
+    /**
+     * Token yang sudah dimiliki client LAIN, jadi tidak boleh dipilih.
+     *
+     * 🔴 Client yang sedang diedit dikecualikan. Tanpa itu, admin tidak akan
+     * pernah bisa menyimpan client yang sudah punya token - tokennya sendiri
+     * termasuk daftar "dimiliki client lain", dan form menolak nilai yang
+     * tidak berubah sama sekali.
+     *
+     * @return list<string>
+     */
+    protected function tokensOwnedByOtherClients(): array
+    {
+        return WaraClient::query()
+            ->whereNotNull('api_token_id')
+            ->when(
+                $this->client?->exists,
+                fn ($q) => $q->whereKeyNot($this->client->getKey())
+            )
+            ->pluck('api_token_id')
+            ->map(fn ($id): string => (string) $id)
+            ->all();
+    }
+
+    /**
+     * Token yang bisa dipilih untuk client tipe `token`.
+     *
+     * 🔴 Token yang sudah dipakai client lain TETAP ditampilkan, tapi ditandai
+     * dan tidak bisa dipilih lagi. Kalau disembunyikan begitu saja, admin yang
+     * sedang memperbaiki client lama akan melihat dropdown kosong dan menyimpulkan
+     * tokennya hilang - padahal token itu ada dan milik client ini.
+     *
+     * 🔴 Dua token yang menunjuk satu client dicegah lewat validasi `save()`,
+     * bukan lewat filter daftar. Filter hanya mengubah apa yang terlihat;
+     * `DeviceRouter::clientForApiTokenId()` yang benar-benar memutuskan, dan
+     * dia akan mengembalikan baris pertama tanpa tahu ada duplikat.
+     *
+     * `bale/api` dicek dengan `class_exists`, bukan `use` statis: wara tidak
+     * mendeklarasikan api sebagai dependency, jadi form harus tetap bisa
+     * dirender di instalasi yang tidak memasang `bale/api`.
+     *
+     * @return array<int, array{id: string, label: string, available: bool}>
+     */
+    protected function loadApiTokens(): array
+    {
+        $class = 'Bale\\Api\\Models\\ApiToken';
+
+        if (! class_exists($class)) {
+            return [];
+        }
+
+        // `pluck(api_token_id, id)` memberi peta token -> client yg memakainya
+        // dalam satu query. Versi pertama memakai loop `find()` per token, dan
+        // itu N+1 yang tidak terlihat: daftar token tumbuh, dan setiap baris
+        // menambah satu query ke database.
+        $ownerByToken = WaraClient::query()
+            ->whereNotNull('api_token_id')
+            ->get(['id', 'name', 'api_token_id'])
+            ->keyBy('api_token_id');
+
+        /** @var Collection<int, object> $tokens */
+        $tokens = $class::query()->orderBy('name')->get(['id', 'name', 'revoked_at']);
+
+        return $tokens
+            ->map(function (object $token) use ($ownerByToken): array {
+                $owner = $ownerByToken->get($token->getKey());
+
+                $label = (string) $token->name;
+
+                if ($token->revoked_at !== null) {
+                    $label .= ' — '.__('revoked');
+                }
+
+                if ($owner !== null) {
+                    $label .= ' — '.__('dipakai client: :name', ['name' => $owner->name]);
+                }
+
+                return [
+                    'id' => (string) $token->getKey(),
+                    'label' => $label,
+                    'available' => $owner === null,
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     public function addRoute(): void
@@ -178,6 +281,16 @@ class Form extends Component
             'name' => ['required', 'string', 'max:191'],
             'type' => ['required', 'in:'.implode(',', WaraClient::TYPES)],
             'is_active' => ['boolean'],
+            // 🔴 WAJIB untuk client tipe `token`. Validasi `required_if` ini
+            // yang mencegah konfigurasi yang isUsable() tolak diam-diam -
+            // client token tanpa token akan menerima 403 di setiap request
+            // tanpa penjelasan yang bisa dibaca admin.
+            'apiTokenId' => [
+                'nullable',
+                'uuid',
+                'required_if:type,'.WaraClient::TYPE_TOKEN,
+                Rule::notIn($this->tokensOwnedByOtherClients()),
+            ],
             'routes' => ['array'],
             // 🔴 `routes.*.id` WAJIB punya aturan. Tanpa itu `validate()`
             // mengembalikan array route TANPA kunci `id`, `syncRoutes()`
@@ -209,6 +322,21 @@ class Form extends Component
                 'is_active' => $validated['is_active'],
             ])->save();
         }
+
+        // 🔴 `api_token_id` di luar `$fillable` dan itu disengaja: kolom ini
+        // menentukan client ini "dipanggil oleh siapa", jadi harus lewat jalur
+        // eksplisit - bukan `fill()` yang isinya bisa datang dari mana saja.
+        //
+        // Dan saat tipe berubah dari `token` ke `service`, nilainya HARUS
+        // dibersihkan. Kalau tidak, client `service` masih memegang token yang
+        // tidak pernah dipakai, dan `DeviceRouter::clientForApiTokenId()` tetap
+        // memetakannya - jadi request dari token itu mendarat ke client yang
+        // justru tidak memakainya, dan route-nya menyesatkan.
+        $client->forceFill([
+            'api_token_id' => $validated['type'] === WaraClient::TYPE_TOKEN
+                ? $validated['apiTokenId']
+                : null,
+        ])->save();
 
         $this->syncRoutes($client, $validated['routes'] ?? []);
         $this->persistEndpoint();
