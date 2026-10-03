@@ -1,0 +1,61 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Client wara + `bale_id` pada `api_tokens`.
+ *
+ * 🔴 INI ADALAH FONGSI YANG MENAHIKAN YANG SEBELUMNYA TIDAK ADA.
+ *
+ * Sebelumnya `api_tokens` tidak punya kolom yang mengikat token ke penyewa
+ * sama sekali: tidak ada `bale_id`, tidak ada `clientable`, tidak ada apa pun.
+ * Akibatnya router TIDAK MUNGKIN bekerja - kalau `POST /send` dipanggil, tidak
+ * ada cara tahu client mana yang memanggil, jadi tidak ada cara tahu device
+ * mana yang harus dipakai.
+ *
+ * Semua tabel `wara_*` adalah sisi LANDLORD (lihat `src/menu.php` yang
+ * mendaftarkan `type => 'landlord'`), jadi tidak ada pemisahan tenant di sini.
+ * Yang dipetakan adalah "organisasi penyewa" lewat `bale_lists.id`.
+ *
+ * Catatan: `bale_lists.id` dan `api_tokens.id` keduanya `char(36)`, jadi
+ * relasi di sini tidak butuh foreign key - tabel `api_tokens` dimiliki package
+ * `bale/api`, bukan `bale/wara`, dan kita tidak mau mengunci urutannya.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('wara_clients', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+
+            // Organisasi penyewa. NULL untuk client global (mis. notifikasi
+            // sistem) yang tidak dimiliki satu bale tertentu.
+            $table->uuid('bale_id')->nullable()->index();
+
+            // `token`     = client yang_identity-nya adalah sebuah api token.
+            // `service`   = client internal bale (mis. WaraChannel notifikasi).
+            // `tenant`    = client perorganisasi tanpa token sendiri.
+            $table->string('type', 32)->default('service');
+
+            // Wajib kalau `type = 'token'`. Tidak dipasang sebagai foreign key
+            // supaya `bale/wara` tidak bergantung pada migrasi `bale/api`.
+            $table->uuid('api_token_id')->nullable()->index();
+
+            $table->string('name');
+
+            // Client nonaktif harus gagal diam-diam, bukan tetap melayani.
+            $table->boolean('is_active')->default(true);
+
+            $table->timestamps();
+
+            $table->index(['type', 'is_active']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('wara_clients');
+    }
+};

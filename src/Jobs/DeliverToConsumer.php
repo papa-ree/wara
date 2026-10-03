@@ -3,7 +3,7 @@
 namespace Bale\Wara\Jobs;
 
 use Bale\Wara\Models\WaraConsumerDelivery;
-use Bale\Wara\Support\ConsumerConfig;
+use Bale\Wara\Models\WaraWebhookEndpoint;
 use Bale\Wara\Support\OutgoingPayload;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -25,10 +25,15 @@ use RuntimeException;
  *    dan dihitung SEKALI di constructor, jadi nilainya sama persis di semua
  *    percobaan retry. Header `X-Wara-Delivery-Id` karena itu juga stabil,
  *    sehingga client bisa menolak duplikat (§12.4).
- *  - **Tidak mengirim apa pun ke consumer `enabled=false`.**
+ *  - **Tidak mengirim apa pun ke endpoint `enabled=false`.**
  *  - **Signature dihitung terhadap byte yang benar-benar dikirim.** Body dikirim
  *    lewat `withBody()` dengan string yang persis sama yang di-HMAC, bukan
  *    array yang akan di-encode ulang oleh HTTP client.
+ *
+ * 🔴 Konfigurasi diambil dari `wara_webhook_endpoints`, bukan dari
+ * `config('wara.consumers')` yang sudah dihapus. Konsekuensinya: admin bisa
+ * menambah client dan endpoint-nya dari UI tanpa menyentuh file config, dan
+ * on/off-nya bisa berbeda per package - bukan global.
  */
 class DeliverToConsumer implements ShouldQueue
 {
@@ -43,7 +48,18 @@ class DeliverToConsumer implements ShouldQueue
 
     public int $backoff = 30;
 
-    public string $consumer;
+    /**
+     * UUID endpoint tujuan.
+     *
+     * 🔴 Dulu kolom ini berisi NAMA consumer yang diambil dari
+     * `config('wara.consumers')`. Sekarang isinya UUID
+     * `wara_webhook_endpoints.id`.
+     *
+     * Kolom di `wara_consumer_deliveries` tetap bernama `consumer` supaya tidak
+     * perlu migrasi tambahan - tapi isinya sudah bukan "consumer" dalam arti lama,
+     * dan kolom itu dip migrating lewat job ini saja.
+     */
+    public string $endpointId;
 
     /**
      * Kunci idempotensi, hex sha256. Stabil lintas retry.
@@ -62,21 +78,23 @@ class DeliverToConsumer implements ShouldQueue
     public ?string $messageId;
 
     public function __construct(
-        string $consumer,
+        string $endpointId,
         string $rawBody,
         ?string $event = null,
         ?string $deviceId = null,
         ?string $messageId = null,
     ) {
-        $config = ConsumerConfig::normalize(ConsumerConfig::resolve($consumer));
-
-        $this->consumer = $consumer;
+        $this->endpointId = $endpointId;
         $this->rawBody = $rawBody;
         $this->event = $event;
         $this->deviceId = $deviceId;
         $this->messageId = $messageId;
-        $this->tries = $config['tries'];
-        $this->backoff = $config['backoff'];
+
+        // 🔴 Config retry SELALU datang dari config paket, bukan dari baris
+        // endpoint. Endpointistered lewat UI, jadi `tries`/`backoff` yang bisa
+        // ikut diubah dari sana akan jadi Surface area yang tidak perlu.
+        $this->tries = (int) config('wara.fanout.tries', 3);
+        $this->backoff = (int) config('wara.fanout.backoff', 30);
 
         $this->deliveryId = self::deliveryIdFor($event, $deviceId, $messageId);
     }
@@ -100,21 +118,34 @@ class DeliverToConsumer implements ShouldQueue
 
     public function handle(): void
     {
-        $config = ConsumerConfig::normalize(ConsumerConfig::resolve($this->consumer));
+        $endpoint = WaraWebhookEndpoint::query()->find($this->endpointId);
 
-        // Dois hal ini checked ulang di sini, bukan hanya saat boot: job yang
-        // sudah terlanjur tersimpan di queue tidak boleh melewati guardrail
-        // setelah config berubah.
-        if (! ConsumerConfig::isEnabled($config)) {
+        // Endpoint dihapus setelah job diantrekan. Berhenti diam, bukan retry:
+        // tidak ada lagi tujuan yang sah untuk dikirim.
+        if ($endpoint === null) {
+            Log::info('Fan-out Wara: endpoint sudah tidak ada, pengiriman dibatalkan.', [
+                'endpoint_id' => $this->endpointId,
+                'delivery_id' => $this->deliveryId,
+            ]);
+
             return;
         }
 
-        if (! ConsumerConfig::subscribesTo($config['events'], $this->event)) {
+        // 🔴 Guardrail dicek ULANG di sini, bukan hanya saat dispatch: job
+        // yang sudah terlanjur tersimpan di queue tidak boleh melewati
+        // keputusan admin yang baru dibuat setelah job itu masuk antrean.
+        if (! $endpoint->isActive()) {
             return;
         }
 
-        $url = ConsumerConfig::assertUrlAllowed($this->consumer, $config['url']);
-        $secret = ConsumerConfig::assertSecretUsable($this->consumer, $config['secret']);
+        if (! WaraWebhookEndpoint::subscribesTo($endpoint->events, $this->event)) {
+            return;
+        }
+
+        $url = $endpoint->assertUrlAllowed();
+        $secret = $endpoint->assertSecretUsable();
+
+        $timeout = (int) config('wara.fanout.timeout', 5);
 
         $delivery = $this->reserveDelivery();
 
@@ -133,10 +164,10 @@ class DeliverToConsumer implements ShouldQueue
             $response = Http::withHeaders([
                 'X-Hub-Signature-256' => $signature,
                 'X-Wara-Delivery-Id' => $this->deliveryId,
-                'X-Wara-Consumer' => $this->consumer,
+                'X-Wara-Endpoint' => $this->endpointId,
                 'X-Wara-Event' => $this->event ?? 'unknown',
             ])
-                ->timeout($config['timeout'])
+                ->timeout($timeout)
                 ->withBody($body, 'application/json')
                 ->post($url);
         } catch (\Throwable $e) {
@@ -167,7 +198,7 @@ class DeliverToConsumer implements ShouldQueue
         // karena memang sinyal "terlalu cepat".
         if ($status >= 400 && $status < 500 && $status !== 429) {
             Log::warning('Fan-out Wara: consumer menolak dengan 4xx, tidak di-retry.', [
-                'consumer' => $this->consumer,
+                'endpoint_id' => $this->endpointId,
                 'delivery_id' => $this->deliveryId,
                 'status' => $status,
             ]);
@@ -189,7 +220,11 @@ class DeliverToConsumer implements ShouldQueue
         try {
             $delivery = WaraConsumerDelivery::query()->firstOrCreate(
                 [
-                    'consumer' => $this->consumer,
+                    // 🔴 Nama KOLOMNYA masih `consumer`, isinya yang berubah jadi
+                    // UUID endpoint. Menukar keduanya di sini tidak akan
+                    // melempar error yang tidak sengaja: `catch (QueryException)` di
+                    // bawah menelan "no such column" dan job berhenti diam.
+                    'consumer' => $this->endpointId,
                     'delivery_id' => $this->deliveryId,
                 ],
                 [
@@ -201,10 +236,18 @@ class DeliverToConsumer implements ShouldQueue
                 ],
             );
         } catch (QueryException $e) {
-            // Another worker won the race and created the same key. Not an
-            // error for us — just treat it as "already reserved".
+            // 🔴 HANYA pelanggaran unique yang aman ditelan. Itu memang balapan:
+            // worker lain sudah membuat kunci yang sama lebih dulu.
+            //
+            // Error skema (kolom hilang, nilainya tidak muat) harus DILEMPAR,
+            // bukan diperlakukan sebagai "sudah dikIrirmat". Menelannya membuat
+            // fan-out mati total tanpa satu baris pun di log.
+            if (! $this->isUniqueViolation($e)) {
+                throw $e;
+            }
+
             Log::info('Fan-out Wara: delivery key bentrok saat insert, dilewati.', [
-                'consumer' => $this->consumer,
+                'endpoint_id' => $this->endpointId,
                 'delivery_id' => $this->deliveryId,
             ]);
 
@@ -216,6 +259,26 @@ class DeliverToConsumer implements ShouldQueue
         }
 
         return $delivery;
+    }
+
+    /**
+     * Apakah ini pelanggaran unique index, bukan error skema?
+     *
+     * SQLite dan MySQL memakai kode yang berbeda, jadi keduanya dicek. TUJUANNYA
+     * satu: jangan sampai error yang bukan balapan ikut ditelan.
+     */
+    protected function isUniqueViolation(QueryException $e): bool
+    {
+        $sqlState = (string) $e->getCode();
+        $message = $e->getMessage();
+
+        // SQLSTATE 23000 = integrity constraint violation.
+        if ($sqlState === '23000' || $sqlState === '23505') {
+            return true;
+        }
+
+        return str_contains($message, 'UNIQUE constraint failed')
+            || str_contains($message, 'Duplicate entry');
     }
 
     protected function markSending(WaraConsumerDelivery $delivery): void

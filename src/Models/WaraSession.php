@@ -4,19 +4,20 @@ namespace Bale\Wara\Models;
 
 use Bale\Core\Traits\LogsActivity;
 use Bale\Wara\Data\DeviceState;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Spatie\Activitylog\Support\LogOptions;
 
 /**
- * @property int $id
+ * @property string $id
  * @property string $device_id
  * @property string|null $jid
  * @property string|null $display_name
  * @property bool $is_present
  * @property bool $is_connected
  * @property bool $is_logged_in
- * @property string|null $purpose
  * @property Carbon|null $last_seen_at
  */
 class WaraSession extends Model
@@ -36,10 +37,13 @@ class WaraSession extends Model
     protected $keyType = 'string';
 
     /**
-     * `purpose` SENGAJA TIDAK ada di sini. Kolom itu hanya boleh diisi admin
-     * (PRD §7) — bukan oleh `wara:sync-devices`, bukan oleh gateway, dan tidak
-     * pernah dari env. Mengeluarkannya dari $fillable membuat itu ditegakkan
-     * level model, bukan sekadar konvensi.
+     * 🔴 `purpose` TIDAK ADA lagi di tabel ini — kolomnya dihapus oleh migrasi
+     * `create_wara_routes_table`.
+     *
+     * Penugasan device ke tujuan layanan pindah ke `wara_routes`, yang unik
+     * PER CLIENT. Itu yang membuat dua client boleh memakai device yang sama
+     * untuk `notifikasi`, dan yang membuat `wara_sessions.purpose` yang unik
+     * global tidak lagi membatasi siapa boleh memakai device mana.
      */
     protected $fillable = [
         'device_id',
@@ -70,7 +74,6 @@ class WaraSession extends Model
         'is_present',
         'is_connected',
         'is_logged_in',
-        'purpose',
         'last_seen_at',
     ];
 
@@ -80,6 +83,20 @@ class WaraSession extends Model
             ->logOnly(self::LOGGED_ATTRIBUTES)
             ->logOnlyDirty()
             ->dontLogIfAttributesChangedOnly(['updated_at']);
+    }
+
+    /**
+     * Route yang memakai device ini.
+     *
+     * 🔴 Satu device bisa melayani BANYAK client. Ini kebalikan dari skema lama
+     * di mana `purpose` di device berarti satu device hanya boleh punya satu
+     * tujuan di seluruh sistem.
+     *
+     * @return HasMany<WaraRoute, $this>
+     */
+    public function routes(): HasMany
+    {
+        return $this->hasMany(WaraRoute::class, 'device_id', 'device_id');
     }
 
     /**

@@ -3,6 +3,8 @@
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\DeviceNotReadyException;
 use Bale\Wara\Exceptions\WaraException;
+use Bale\Wara\Models\WaraClient;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraManager;
 use Bale\Wara\WaraServiceProvider;
@@ -40,30 +42,67 @@ function makeSessionDeviceResolutionTest(array $overrides = []): WaraSession
     ], $overrides));
 }
 
-describe('urutan resolusi §6.5.1', function () {
-    it('baris 1: deviceId eksplisit menang atas purpose', function () {
-        $eksplisit = makeSessionDeviceResolutionTest();
-        $ditugaskan = makeSessionDeviceResolutionTest();
-        $ditugaskan->forceFill(['purpose' => 'otp'])->save();
+function makeClientDeviceResolutionTest(array $overrides = []): WaraClient
+{
+    static $counter = 0;
+    $counter++;
 
-        $resolved = $this->manager->resolveDevice('otp', $eksplisit->device_id);
+    return WaraClient::query()->create(array_merge([
+        'type' => WaraClient::TYPE_SERVICE,
+        'name' => 'Client res '.$counter,
+        'is_active' => true,
+    ], $overrides));
+}
+
+function makeRouteDeviceResolutionTest(WaraClient $client, string $deviceId, string $purpose = 'otp'): WaraRoute
+{
+    // `client_id` di luar $fillable, jadi harus lewat forceFill.
+    $route = new WaraRoute;
+
+    $route->forceFill([
+        'client_id' => $client->getKey(),
+        'purpose' => $purpose,
+        'device_id' => $deviceId,
+    ])->save();
+
+    return $route;
+}
+
+/**
+ * 🔴 URUTAN RESOLUSI BERUBAH, dan test ini ditulis ulang karena itu.
+ *
+ * Schema lama menjawab "device mana untuk purpose ini?" secara global lalu
+ * jatuh ke `default_device_id`. Sekarang pertanyaannya "client ini, purpose
+ * ini -> device mana", dan jawabannya harus tegas: kalau tidak ada, itu
+ * kesalahan konfigurasi yang harus terlihat, bukan alasan untuk diam-diam
+ * mengirim dari nomor lain.
+ */
+describe('urutan resolusi: device > client+purpose > default', function () {
+    it('baris 1: deviceId eksplisit menang atas route client', function () {
+        $eksplisit = makeSessionDeviceResolutionTest();
+        $client = makeClientDeviceResolutionTest();
+        makeRouteDeviceResolutionTest($client, 'device_dari_route');
+
+        $resolved = $this->manager->resolveDevice('otp', $eksplisit->device_id, $client);
 
         expect($resolved->device_id)->toBe($eksplisit->device_id)
-            ->and($resolved->device_id)->not->toBe($ditugaskan->device_id);
+            ->and($resolved->device_id)->not->toBe('device_dari_route');
     });
 
-    it('baris 2: purpose memilih device yang ditugaskan', function () {
+    it('baris 2: client + purpose memilih device dari route', function () {
+        $client = makeClientDeviceResolutionTest();
+        $device = makeSessionDeviceResolutionTest();
         $lain = makeSessionDeviceResolutionTest();
-        $ditugaskan = makeSessionDeviceResolutionTest();
-        $ditugaskan->forceFill(['purpose' => 'otp'])->save();
 
-        $resolved = $this->manager->resolveDevice('otp');
+        makeRouteDeviceResolutionTest($client, $device->device_id);
 
-        expect($resolved->device_id)->toBe($ditugaskan->device_id)
+        $resolved = $this->manager->resolveDevice('otp', null, $client);
+
+        expect($resolved->device_id)->toBe($device->device_id)
             ->and($resolved->device_id)->not->toBe($lain->device_id);
     });
 
-    it('baris 3: purpose tanpa device jatuh ke default_device_id', function () {
+    it('baris 3: tanpa client memakai default_device_id', function () {
         $default = makeSessionDeviceResolutionTest();
         config()->set('wara.default_device_id', $default->jid);
 
@@ -72,13 +111,64 @@ describe('urutan resolusi §6.5.1', function () {
         expect($resolved->device_id)->toBe($default->device_id);
     });
 
-    it('baris 4: purpose null memakai default_device_id', function () {
+    it('baris 4: purpose null tanpa client memakai default_device_id', function () {
         $default = makeSessionDeviceResolutionTest();
         config()->set('wara.default_device_id', $default->jid);
 
         $resolved = $this->manager->resolveDevice();
 
         expect($resolved->device_id)->toBe($default->device_id);
+    });
+
+    it('🔴 client tanpa route GAGAL, tidak jatuh ke default_device_id', function () {
+        // Ini perubahan perilaku paling penting. Schema lama diam-diam
+        // memakai default device kalau purpose tidak ditugaskan - artinya
+        // pesan terkirim dari nomor yang tidak diminta siapa pun.
+        $default = makeSessionDeviceResolutionTest();
+        config()->set('wara.default_device_id', $default->jid);
+
+        $client = makeClientDeviceResolutionTest();
+
+        expect(fn () => $this->manager->resolveDevice('otp', null, $client))
+            ->toThrow(DeviceNotFoundException::class, $client->name);
+    });
+
+    it('🔴 route dengan outbound dimatikan GAGAL keras', function () {
+        $client = makeClientDeviceResolutionTest();
+        $device = makeSessionDeviceResolutionTest();
+
+        $route = makeRouteDeviceResolutionTest($client, $device->device_id);
+        $route->forceFill(['outbound_enabled' => false])->save();
+
+        expect(fn () => $this->manager->resolveDevice('otp', null, $client))
+            ->toThrow(DeviceNotFoundException::class, 'dimatikan');
+    });
+
+    it('🔴 dua client boleh punya route ke device yang sama', function () {
+        $device = makeSessionDeviceResolutionTest();
+        $clientA = makeClientDeviceResolutionTest(['name' => 'A']);
+        $clientB = makeClientDeviceResolutionTest(['name' => 'B']);
+
+        makeRouteDeviceResolutionTest($clientA, $device->device_id, 'notifikasi');
+        makeRouteDeviceResolutionTest($clientB, $device->device_id, 'notifikasi');
+
+        expect($this->manager->resolveDevice('notifikasi', null, $clientA)->device_id)
+            ->toBe($device->device_id)
+            ->and($this->manager->resolveDevice('notifikasi', null, $clientB)->device_id)
+            ->toBe($device->device_id);
+    });
+
+    it('🔴 route milik client lain tidak bisa dipakai', function () {
+        $deviceA = makeSessionDeviceResolutionTest();
+        $deviceB = makeSessionDeviceResolutionTest();
+        $clientA = makeClientDeviceResolutionTest(['name' => 'A']);
+        $clientB = makeClientDeviceResolutionTest(['name' => 'B']);
+
+        makeRouteDeviceResolutionTest($clientA, $deviceA->device_id);
+
+        // Client B tidak punya route, jadi tidak boleh memakai device milik A.
+        expect(fn () => $this->manager->resolveDevice('otp', null, $clientB))
+            ->toThrow(DeviceNotFoundException::class);
     });
 });
 
@@ -108,7 +198,7 @@ describe('resolusi JID ke Session ID (PRD §6.3.2)', function () {
     });
 });
 
-describe('gerbang §6.5.2 — gagal keras, tanpa fallback', function () {
+describe('gerbang §6.5.2 - gagal keras, tanpa fallback', function () {
     it('menolak device offline', function () {
         $session = makeSessionDeviceResolutionTest(['is_connected' => false, 'is_logged_in' => false]);
 
@@ -151,18 +241,19 @@ describe('gerbang §6.5.2 — gagal keras, tanpa fallback', function () {
         }
     });
 
-    it('device offline tidak dialihkan ke device lain yang sehat', function () {
-        $sehat = makeSessionDeviceResolutionTest();
+    it('🔴 device offline tidak dialihkan ke device lain yang sehat', function () {
+        $client = makeClientDeviceResolutionTest();
+        $deviceSehat = makeSessionDeviceResolutionTest();
+        $deviceRusak = makeSessionDeviceResolutionTest(['is_logged_in' => false]);
 
-        $rusak = makeSessionDeviceResolutionTest(['is_logged_in' => false]);
-        $rusak->forceFill(['purpose' => 'otp'])->save();
+        makeRouteDeviceResolutionTest($client, $deviceRusak->device_id);
 
         // Tetap gagal walau ada device lain yang siap.
-        expect(fn () => $this->manager->resolveDevice('otp'))
+        expect(fn () => $this->manager->resolveDevice('otp', null, $client))
             ->toThrow(DeviceNotReadyException::class);
 
-        expect($sehat->isSendable())->toBeTrue()
-            ->and($rusak->isSendable())->toBeFalse();
+        expect($deviceSehat->isSendable())->toBeTrue()
+            ->and($deviceRusak->isSendable())->toBeFalse();
     });
 });
 
@@ -171,24 +262,38 @@ describe('device yang hilang (§6.5.3)', function () {
         expect(fn () => $this->manager->resolveDevice(null, 'org_hantu'))
             ->toThrow(DeviceNotFoundException::class, 'wara:sync-devices');
     });
+
+    it('route yang menunjuk device yang sudah dihapus gagal dengan nama device itu', function () {
+        $client = makeClientDeviceResolutionTest();
+        makeRouteDeviceResolutionTest($client, 'device_yang_dihapus');
+
+        expect(fn () => $this->manager->resolveDevice('otp', null, $client))
+            ->toThrow(DeviceNotFoundException::class, 'device_yang_dihapus');
+    });
 });
 
-describe('kese uniqueness purpose', function () {
-    it('satu purpose tidak bisa dilayani dua device', function () {
-        // purpose tidak ada di $fillable, jadi harus lewat forceFill.
+describe('kese uniqueness route', function () {
+    it('satu client tidak bisa punya purpose yang sama dua kali', function () {
+        $client = makeClientDeviceResolutionTest();
         $pertama = makeSessionDeviceResolutionTest();
-        $pertama->forceFill(['purpose' => 'otp'])->save();
+        makeRouteDeviceResolutionTest($client, $pertama->device_id);
 
         $kedua = makeSessionDeviceResolutionTest();
 
-        expect(fn () => $kedua->forceFill(['purpose' => 'otp'])->save())
+        expect(fn () => makeRouteDeviceResolutionTest($client, $kedua->device_id))
             ->toThrow(UniqueConstraintViolationException::class);
     });
 
-    it('banyak device boleh punya purpose null', function () {
-        makeSessionDeviceResolutionTest();
-        makeSessionDeviceResolutionTest();
+    it('🔴 banyak client boleh memakai purpose yang sama', function () {
+        // Kebalikan dari skema lama: satu purpose tidak lagi dipetakan ke satu device
+        // tunggal di seluruh sistem.
+        $clientA = makeClientDeviceResolutionTest(['name' => 'A']);
+        $clientB = makeClientDeviceResolutionTest(['name' => 'B']);
+        $device = makeSessionDeviceResolutionTest();
 
-        expect(WaraSession::query()->whereNull('purpose')->count())->toBe(2);
+        makeRouteDeviceResolutionTest($clientA, $device->device_id, 'notifikasi');
+        makeRouteDeviceResolutionTest($clientB, $device->device_id, 'notifikasi');
+
+        expect(WaraRoute::query()->where('purpose', 'notifikasi')->count())->toBe(2);
     });
 });

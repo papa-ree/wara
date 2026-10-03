@@ -2,7 +2,10 @@
 
 use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Jobs\DeliverToConsumer;
+use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraConsumerDelivery;
+use Bale\Wara\Models\WaraRoute;
+use Bale\Wara\Models\WaraWebhookEndpoint;
 use Bale\Wara\Support\OutgoingPayload;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -25,22 +28,66 @@ beforeEach(function () {
     }
 });
 
-/**
- * Konfigurasi consumer aktif yang valid.
- *
- * @return array<string, mixed>
- */
-function activeConsumer(array $overrides = []): array
+function makeClientFanOutTest(string $name = 'Client uji'): WaraClient
 {
-    return array_merge([
-        'enabled' => true,
+    return WaraClient::query()->create([
+        'type' => WaraClient::TYPE_SERVICE,
+        'name' => $name,
+        'is_active' => true,
+    ]);
+}
+
+function makeRouteFanOutTest(WaraClient $client, string $deviceId = 'wago prod'): WaraRoute
+{
+    $route = new WaraRoute;
+
+    $route->forceFill([
+        'client_id' => $client->getKey(),
+        'purpose' => 'notifikasi',
+        'device_id' => $deviceId,
+        'inbound_webhook_enabled' => true,
+    ])->save();
+
+    return $route;
+}
+
+/**
+ * 🔴 Endpoint NYATA di database, bukan array config.
+ *
+ * Dulu test ini memakai `config()->set('wara.consumers', ...)`. Sekarang
+ * konfigurasi webhook hidup di `wara_webhook_endpoints` - inilah bentuk yang
+ * dipakai produksi, dan mengujinya lewat config hanya akan menguji jalan yang
+ * sudah tidak ada.
+ *
+ * `secret` TIDAK bisa lewat `fill()` karena tidak ada di `$fillable` - dan itu
+ * disengaja: secret adalah output dari form admin, bukan input yang boleh
+ * datang dari mana saja.
+ *
+ * @param  array<string, mixed>  $overrides
+ */
+function makeEndpointFanOutTest(array $overrides = []): WaraWebhookEndpoint
+{
+    $client = makeClientFanOutTest('Client '.uniqid());
+    makeRouteFanOutTest($client);
+
+    $endpoint = new WaraWebhookEndpoint;
+
+    $endpoint->forceFill(array_merge([
+        'client_id' => $client->getKey(),
         'url' => 'https://srikandi.ponorogo.go.id/webhook',
-        'secret' => 'secret-srikandi-yang-cukup-panjang-32',
         'events' => ['message'],
-        'timeout' => 5,
-        'tries' => 3,
-        'backoff' => 30,
-    ], $overrides);
+        'enabled' => true,
+    ], $overrides));
+
+    $endpoint->forceFill([
+        'secret' => array_key_exists('secret', $overrides)
+            ? $overrides['secret']
+            : 'secret-srikandi-yang-cukup-panjang-32',
+    ]);
+
+    $endpoint->save();
+
+    return $endpoint;
 }
 
 /**
@@ -59,14 +106,16 @@ function gowaRawBody(array $overrides = []): string
         ],
     ], $overrides);
 
-    // Go memakai \u003c\u003e\u0026 dan tidak meng-escape slash.
+    // Go memakai < > & dan tidak meng-escape slash.
     return (string) json_encode($payload, JSON_UNESCAPED_UNICODE);
 }
 
-function dispatchJob(?string $consumer = 'srikandi'): DeliverToConsumer
+function dispatchJob(?WaraWebhookEndpoint $endpoint = null): DeliverToConsumer
 {
+    $endpoint ??= makeEndpointFanOutTest();
+
     return new DeliverToConsumer(
-        $consumer ?? 'srikandi',
+        (string) $endpoint->getKey(),
         gowaRawBody(),
         'message',
         'wago prod',
@@ -74,73 +123,88 @@ function dispatchJob(?string $consumer = 'srikandi'): DeliverToConsumer
     );
 }
 
-describe('kontrak config consumer (PRD §12.2)', function () {
-    it('consumer default tidak aktif tanpa enabled=true', function () {
-        config()->set('wara.consumers', [
-            'srikandi' => ['url' => 'https://x.test/hook', 'secret' => str_repeat('a', 32)],
-        ]);
+/**
+ * 🔴 Kontrak endpoint, bukan kontrak config.
+ *
+ * Yang diuji di sini: endpoint default tidak aktif, secret kosong/pendek
+ * ditolak, dan `http://` ke host publik ditolak (anti SSRF).
+ *
+ * Bedanya dari dulu: validasi TIDAK lagi jalan saat boot. Endpoint diisi lewat
+ * UI admin, jadi tidak ada file config yang bisa dibaca di boot - dan melakukan
+ * query database di boot juga berbahaya karena `php artisan migrate` bisa jalan
+ * sebelum tabelnya ada. Guardrail-nya dipanggil dua kali: saat admin menyimpan
+ * endpoint, dan lagi di dalam job saat benar-benar mengirim.
+ */
+describe('kontrak endpoint webhook', function () {
+    it('endpoint default tidak aktif tanpa enabled=true', function () {
+        $endpoint = makeEndpointFanOutTest(['enabled' => false]);
 
         Http::fake();
 
-        dispatchJob()->handle();
+        dispatchJob($endpoint)->handle();
 
         Http::assertNothingSent();
         expect(WaraConsumerDelivery::query()->count())->toBe(0);
     });
 
-    it('secret kosong pada consumer aktif menggagalkan boot', function () {
-        config()->set('wara.consumers', ['srikandi' => activeConsumer(['secret' => ''])]);
+    it('secret kosong pada endpoint aktif ditolak', function () {
+        $endpoint = makeEndpointFanOutTest(['secret' => '']);
 
-        expect(fn () => $this->app->register(WaraServiceProvider::class, true))
-            ->toThrow(WaraException::class, 'WARA_CONSUMER_SRIKANDI_SECRET');
-    });
-
-    it('secret pendek pada consumer aktif menggagalkan boot', function () {
-        config()->set('wara.consumers', ['srikandi' => activeConsumer(['secret' => 'pendek'])]);
-
-        expect(fn () => $this->app->register(WaraServiceProvider::class, true))
+        expect(fn () => $endpoint->assertSecretUsable())
             ->toThrow(WaraException::class, 'minimal 32 karakter');
     });
 
-    it('url http ke host publik ditolak (anti SSRF)', function () {
-        config()->set('wara.consumers', [
-            'srikandi' => activeConsumer(['url' => 'http://srikandi.ponorogo.go.id/webhook']),
-        ]);
+    it('secret pendek pada endpoint aktif ditolak', function () {
+        $endpoint = makeEndpointFanOutTest(['secret' => 'pendek']);
 
-        expect(fn () => $this->app->register(WaraServiceProvider::class, true))
+        expect(fn () => $endpoint->assertSecretUsable())
+            ->toThrow(WaraException::class, 'minimal 32 karakter');
+    });
+
+    it('endpoint aktif dengan secret kosong tidak mengirim apa pun', function () {
+        $endpoint = makeEndpointFanOutTest(['secret' => '']);
+
+        Http::fake();
+
+        expect(fn () => dispatchJob($endpoint)->handle())
+            ->toThrow(WaraException::class);
+
+        Http::assertNothingSent();
+    });
+
+    it('url http ke host publik ditolak (anti SSRF)', function () {
+        $endpoint = makeEndpointFanOutTest(['url' => 'http://srikandi.ponorogo.go.id/webhook']);
+
+        expect(fn () => $endpoint->assertUrlAllowed())
             ->toThrow(WaraException::class, 'https://');
     });
 
     it('url http ke localhost tetap diizinkan untuk pengembangan lokal', function () {
-        config()->set('wara.consumers', [
-            'srikandi' => activeConsumer(['url' => 'http://localhost:8080/webhook']),
-        ]);
+        $endpoint = makeEndpointFanOutTest(['url' => 'http://localhost:8080/webhook']);
 
-        $this->app->register(WaraServiceProvider::class, true);
-
-        expect(config('wara.consumers.srikandi.enabled'))->toBeTrue();
+        expect($endpoint->assertUrlAllowed())->toBe('http://localhost:8080/webhook');
     });
 
-    it('consumer enabled=false tidak divalidasi strict', function () {
-        config()->set('wara.consumers', [
-            'srikandi' => [
-                'enabled' => false,
-                'url' => 'bukan-url-valid',
-                'secret' => '',
-            ],
-        ]);
+    it('url kosong ditolak dengan pesan jelas', function () {
+        $endpoint = makeEndpointFanOutTest(['url' => '']);
 
-        $this->app->register(WaraServiceProvider::class, true);
+        expect(fn () => $endpoint->assertUrlAllowed())
+            ->toThrow(WaraException::class, 'URL webhook');
+    });
 
-        expect(true)->toBeTrue();
+    it('endpoint disabled tidak divalidai strict', function () {
+        // Endpoint yang belum dinyalakan boleh punya url/secret kosong -
+        // itulah default-nya, dan memaksa semuanya sejak awal akan membuat
+        // admin tidak bisa menyimpan endpoint setengah jadi.
+        $endpoint = makeEndpointFanOutTest(['enabled' => false, 'url' => 'bukan-url-valid', 'secret' => '']);
+
+        expect($endpoint->isDeliverable())->toBeFalse();
     });
 });
 
 describe('pengiriman event (PRD §12.4)', function () {
     it('mengirim body verbatim plus delivered_via', function () {
         Http::fake();
-
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
 
         dispatchJob()->handle();
 
@@ -158,9 +222,9 @@ describe('pengiriman event (PRD §12.4)', function () {
         Http::fake();
 
         $secret = 'secret-srikandi-yang-cukup-panjang-32';
-        config()->set('wara.consumers', ['srikandi' => activeConsumer(['secret' => $secret])]);
+        $endpoint = makeEndpointFanOutTest(['secret' => $secret]);
 
-        dispatchJob()->handle();
+        dispatchJob($endpoint)->handle();
 
         Http::assertSent(function (Request $request) use ($secret) {
             $expected = 'sha256='.hash_hmac('sha256', $request->body(), $secret);
@@ -169,32 +233,48 @@ describe('pengiriman event (PRD §12.4)', function () {
         });
     });
 
+    it('🔴 secret terenkripsi di database, tidak disimpan polos', function () {
+        $secret = 'secret-srikandi-yang-cukup-panjang-32';
+        $endpoint = makeEndpointFanOutTest(['secret' => $secret]);
+
+        $raw = DB::table('wara_webhook_endpoints')
+            ->where('id', $endpoint->getKey())
+            ->value('secret');
+
+        // Ciphertext Laravel, bukan string asli.
+        expect($raw)->not->toBe($secret)
+            ->and($endpoint->fresh()->secret)->toBe($secret);
+    });
+
     it('memasukkan header delivery sesuai PRD §12.4', function () {
         Http::fake();
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
-
-        $job = dispatchJob();
+        $endpoint = makeEndpointFanOutTest();
+        $job = dispatchJob($endpoint);
         $job->handle();
 
         Http::assertSent(fn (Request $request) => $request->header('X-Wara-Delivery-Id')[0] === $job->deliveryId
-            && $request->header('X-Wara-Consumer')[0] === 'srikandi'
+            && $request->header('X-Wara-Endpoint')[0] === (string) $endpoint->getKey()
             && $request->header('X-Wara-Event')[0] === 'message'
             && $request->header('Content-Type')[0] === 'application/json');
     });
 
     it('delivery_id sama persis lintas instance (stabil untuk retry)', function () {
-        $a = dispatchJob();
-        $b = dispatchJob();
+        $endpoint = makeEndpointFanOutTest();
+
+        $a = dispatchJob($endpoint);
+        $b = dispatchJob($endpoint);
 
         expect($a->deliveryId)->toBe($b->deliveryId)
             ->and($a->deliveryId)->toBe(DeliverToConsumer::deliveryIdFor('message', 'wago prod', 'wamid.ABC123'));
     });
 
     it('delivery_id tetap deterministik walau message_id kosong', function () {
-        $job = new DeliverToConsumer('srikandi', gowaRawBody(), 'message', 'wago prod', null);
+        $endpoint = makeEndpointFanOutTest();
+        $id = (string) $endpoint->getKey();
 
-        $again = new DeliverToConsumer('srikandi', gowaRawBody(), 'message', 'wago prod', null);
+        $job = new DeliverToConsumer($id, gowaRawBody(), 'message', 'wago prod', null);
+        $again = new DeliverToConsumer($id, gowaRawBody(), 'message', 'wago prod', null);
 
         expect($job->deliveryId)->toBe($again->deliveryId)
             ->and($job->deliveryId)->not->toBe(
@@ -202,24 +282,37 @@ describe('pengiriman event (PRD §12.4)', function () {
             );
     });
 
-    it('tidak mengirim event yang tidak ada di daftar events consumer', function () {
+    it('tidak mengirim event yang tidak ada di daftar events endpoint', function () {
         Http::fake();
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer(['events' => ['message.ack']])]);
+        $endpoint = makeEndpointFanOutTest(['events' => ['message.ack']]);
 
-        dispatchJob()->handle();
+        dispatchJob($endpoint)->handle();
 
         Http::assertNothingSent();
     });
 
-    it('consumer subscribed ke semua event saat events kosong', function () {
+    it('endpoint subscribed ke semua event saat events kosong', function () {
         Http::fake();
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer(['events' => []])]);
+        $endpoint = makeEndpointFanOutTest(['events' => []]);
 
-        dispatchJob()->handle();
+        dispatchJob($endpoint)->handle();
 
         Http::assertSentCount(1);
+    });
+
+    it('endpoint yang sudah dihapus tidak membuat job gagal', function () {
+        Http::fake();
+
+        $endpoint = makeEndpointFanOutTest();
+        $job = dispatchJob($endpoint);
+
+        $endpoint->delete();
+
+        $job->handle();
+
+        Http::assertNothingSent();
     });
 });
 
@@ -227,10 +320,10 @@ describe('idempotensi (PRD §7.1a, §12.6)', function () {
     it('job kedua dengan delivery_id sama tidak mengirim lagi', function () {
         Http::fake();
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
+        $endpoint = makeEndpointFanOutTest();
 
-        dispatchJob()->handle();
-        dispatchJob()->handle();
+        dispatchJob($endpoint)->handle();
+        dispatchJob($endpoint)->handle();
 
         Http::assertSentCount(1);
         expect(WaraConsumerDelivery::query()->count())->toBe(1);
@@ -239,11 +332,11 @@ describe('idempotensi (PRD §7.1a, §12.6)', function () {
     it('attempts tidak naik saat job diulang setelah sukses', function () {
         Http::fake();
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
+        $endpoint = makeEndpointFanOutTest();
 
-        dispatchJob()->handle();
-        dispatchJob()->handle();
-        dispatchJob()->handle();
+        dispatchJob($endpoint)->handle();
+        dispatchJob($endpoint)->handle();
+        dispatchJob($endpoint)->handle();
 
         expect(WaraConsumerDelivery::query()->first()->attempts)->toBe(1);
     });
@@ -251,25 +344,23 @@ describe('idempotensi (PRD §7.1a, §12.6)', function () {
     it('event berbeda tetap terkirim masing-masing', function () {
         Http::fake();
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer(['events' => []])]);
+        $endpoint = makeEndpointFanOutTest(['events' => []]);
+        $id = (string) $endpoint->getKey();
 
-        dispatchJob()->handle();
-
-        (new DeliverToConsumer('srikandi', gowaRawBody(), 'message', 'wago prod', 'wamid.OTHER'))->handle();
+        dispatchJob($endpoint)->handle();
+        (new DeliverToConsumer($id, gowaRawBody(), 'message', 'wago prod', 'wamid.OTHER'))->handle();
 
         Http::assertSentCount(2);
     });
 
-    it('consumer berbeda tidak saling memblokir', function () {
+    it('🔴 endpoint berbeda tidak saling memblokir', function () {
         Http::fake();
 
-        config()->set('wara.consumers', [
-            'srikandi' => activeConsumer(),
-            'rakaca' => activeConsumer(['url' => 'https://rakaca.test/webhook']),
-        ]);
+        $srikandi = makeEndpointFanOutTest();
+        $rakaca = makeEndpointFanOutTest(['url' => 'https://rakaca.test/webhook']);
 
-        dispatchJob('srikandi')->handle();
-        dispatchJob('rakaca')->handle();
+        dispatchJob($srikandi)->handle();
+        dispatchJob($rakaca)->handle();
 
         Http::assertSentCount(2);
         expect(WaraConsumerDelivery::query()->count())->toBe(2);
@@ -279,8 +370,6 @@ describe('idempotensi (PRD §7.1a, §12.6)', function () {
 describe('penanganan kegagalan (PRD §12.4, §12.6)', function () {
     it('4xx tidak di-retry dan tercatat failed', function () {
         Http::fake(['*' => Http::response('bad request', 400)]);
-
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
 
         dispatchJob()->handle();
 
@@ -295,15 +384,11 @@ describe('penanganan kegagalan (PRD §12.4, §12.6)', function () {
     it('5xx melempar exception agar worker retry', function () {
         Http::fake(['*' => Http::response('server error', 500)]);
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
-
         dispatchJob()->handle();
     })->throws(RuntimeException::class);
 
     it('5xx mencatat failed beserta alasan sebelum dilempar', function () {
         Http::fake(['*' => Http::response('boom', 503)]);
-
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
 
         try {
             dispatchJob()->handle();
@@ -321,15 +406,11 @@ describe('penanganan kegagalan (PRD §12.4, §12.6)', function () {
     it('429 tetap dianggap layak retry', function () {
         Http::fake(['*' => Http::response('slow down', 429)]);
 
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
-
         dispatchJob()->handle();
     })->throws(RuntimeException::class);
 
     it('connection error tercatat lalu dilempar untuk retry', function () {
         Http::fake(fn () => throw new ConnectionException('timeout'));
-
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
 
         try {
             dispatchJob()->handle();
@@ -345,8 +426,6 @@ describe('penanganan kegagalan (PRD §12.4, §12.6)', function () {
 
     it('sukses mengisi delivered_at dan mengosongkan last_error', function () {
         Http::fake();
-
-        config()->set('wara.consumers', ['srikandi' => activeConsumer()]);
 
         dispatchJob()->handle();
 
@@ -367,7 +446,7 @@ describe('OutgoingPayload (PRD §12.4 verbatim)', function () {
 
         // Setiap byte asli harus masih ada, apa adanya, hanya diakhiri
         // field baru. Inilah yang membuat signature consumer tetap cocok.
-        expect($result)->toBe($raw === '{}' ? '{}' : '{"event":"message","payload":{"body":"a/b <c>"},"delivered_via":"bale/wara"}')
+        expect($result)->toBe('{"event":"message","payload":{"body":"a/b <c>"},"delivered_via":"bale/wara"}')
             ->and(str_starts_with($result, substr($raw, 0, -1)))->toBeTrue()
             ->and(json_decode($result, true))->toHaveKey('delivered_via');
     });
@@ -381,7 +460,7 @@ describe('OutgoingPayload (PRD §12.4 verbatim)', function () {
             ->and(OutgoingPayload::withDeliveredVia(''))->toBe('');
     });
 
-    it('hasilnya tetap JSON valid yang bisa di-decode consumer', function () {
+    it('hasilnya tetap JSON valid yang bisa di-decode client', function () {
         $decoded = json_decode(
             OutgoingPayload::withDeliveredVia(gowaRawBody()),
             true

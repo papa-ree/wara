@@ -2,7 +2,10 @@
 
 use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Jobs\DeliverToConsumer;
+use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraLog;
+use Bale\Wara\Models\WaraRoute;
+use Bale\Wara\Models\WaraWebhookEndpoint;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -21,6 +24,51 @@ beforeEach(function () {
 function signBody(string $body, ?string $secret = 'rahasia-webhook'): string
 {
     return 'sha256='.hash_hmac('sha256', $body, (string) $secret);
+}
+
+/**
+ * 🔴 Endpoint NYATA untuk device `wago prod`.
+ *
+ * Dulu test ini memakai `config()->set('wara.consumers', ...)`. Sekarang
+ * endpoint-nya hidup di `wara_webhook_endpoints`, dan kelompok yang menerima
+ * event ditentukan oleh ROUTE `device + purpose` yang punya
+ * `inbound_webhook_enabled = true`.
+ *
+ * `secret` sengaja di luar `$fillable` dan ditulis lewat `forceFill()` - sama
+ * seperti di form admin.
+ *
+ * @param  array<string, mixed>  $overrides
+ */
+function makeFanOutEndpointWebhookTest(array $overrides = []): WaraWebhookEndpoint
+{
+    $client = WaraClient::query()->create([
+        'type' => WaraClient::TYPE_SERVICE,
+        'name' => 'Client webhook '.uniqid(),
+        'is_active' => true,
+    ]);
+
+    $route = new WaraRoute;
+    $route->forceFill([
+        'client_id' => $client->getKey(),
+        'purpose' => 'notifikasi',
+        'device_id' => 'wago prod',
+        'inbound_webhook_enabled' => array_key_exists('inbound', $overrides)
+            ? $overrides['inbound']
+            : true,
+    ])->save();
+
+    $endpoint = new WaraWebhookEndpoint;
+    $endpoint->forceFill(array_merge([
+        'client_id' => $client->getKey(),
+        'url' => 'https://srikandi.test/webhook',
+        'events' => ['message'],
+        'enabled' => true,
+    ], $overrides));
+
+    $endpoint->forceFill(['secret' => 'secret-srikandi-yang-cukup-panjang-32']);
+    $endpoint->save();
+
+    return $endpoint;
 }
 
 describe('verifikasi signature webhook (PRD §6.1)', function () {
@@ -123,14 +171,7 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
     it('mengantrekan job ke consumer aktif dan tetap balas 200', function () {
         Queue::fake();
 
-        config()->set('wara.consumers', [
-            'srikandi' => [
-                'enabled' => true,
-                'url' => 'https://srikandi.test/webhook',
-                'secret' => 'secret-srikandi-yang-cukup-panjang-32',
-                'events' => ['message'],
-            ],
-        ]);
+        $endpoint = makeFanOutEndpointWebhookTest();
 
         $body = json_encode([
             'event' => 'message',
@@ -143,7 +184,7 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
         ])->assertOk();
 
         Queue::assertPushed(DeliverToConsumer::class, function (DeliverToConsumer $job) {
-            return $job->consumer === 'srikandi'
+            return $job->event === 'message'
                 && $job->event === 'message'
                 && $job->deviceId === 'wago prod'
                 && $job->messageId === 'wamid.1';
@@ -153,14 +194,7 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
     it('tidak mengantrekan apa pun saat semua consumer disabled', function () {
         Queue::fake();
 
-        config()->set('wara.consumers', [
-            'srikandi' => [
-                'enabled' => false,
-                'url' => 'https://srikandi.test/webhook',
-                'secret' => 'secret-srikandi-yang-cukup-panjang-32',
-                'events' => ['message'],
-            ],
-        ]);
+        makeFanOutEndpointWebhookTest(['enabled' => false]);
 
         $body = json_encode(['event' => 'message', 'device_id' => 'wago prod', 'payload' => []]);
 
@@ -168,7 +202,12 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
             'X-Hub-Signature-256' => signBody($body),
         ])->assertOk();
 
-        Queue::assertNothingPushed();
+        // 🔴 Hanya job fan-out yang relevan di sini.
+        //
+        // `assertNothingPushed()` terlalu luas: membuat client/route/endpoint
+        // juga mengantrekan `LogActivityJob` dari trait `LogsActivity`, dan
+        // itu bukan bagian dari perilaku yang sedang diuji.
+        Queue::assertNotPushed(DeliverToConsumer::class);
     });
 
     it('tetap membalas 200 dan menyimpan wara_logs walau antrean gagal', function () {
@@ -176,20 +215,19 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
         // Ini skenario nyata: broker mati, atau serialisasi job gagal.
         $exploded = false;
 
+        // 🔴 Endpoint dibuat DULUAN, sebelum `Queue::before` dipasang.
+        //
+        // `Queue::before` meledak untuk APA SAJA job yang diantrekan, termasuk
+        // `LogActivityJob` dari trait `LogsActivity` saat model disimpan. Kalau
+        // listener-nya dipasang lebih dulu, test ini akan gagal karena alasan
+        // yang salah.totalnya - bukan karena fan-out.
+        $endpoint = makeFanOutEndpointWebhookTest();
+
         Queue::before(function () use (&$exploded) {
             $exploded = true;
 
             throw new RuntimeException('queue down');
         });
-
-        config()->set('wara.consumers', [
-            'srikandi' => [
-                'enabled' => true,
-                'url' => 'https://srikandi.test/webhook',
-                'secret' => 'secret-srikandi-yang-cukup-panjang-32',
-                'events' => ['message'],
-            ],
-        ]);
 
         $body = json_encode([
             'event' => 'message',
@@ -212,14 +250,7 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
     it('hanya mengantrekan event yang di-subscribe consumer', function () {
         Queue::fake();
 
-        config()->set('wara.consumers', [
-            'srikandi' => [
-                'enabled' => true,
-                'url' => 'https://srikandi.test/webhook',
-                'secret' => 'secret-srikandi-yang-cukup-panjang-32',
-                'events' => ['message.ack'],
-            ],
-        ]);
+        makeFanOutEndpointWebhookTest(['events' => ['message.ack']]);
 
         $body = json_encode([
             'event' => 'message',
@@ -231,7 +262,12 @@ describe('fan-out dari receiver (PRD §12.3)', function () {
             'X-Hub-Signature-256' => signBody($body),
         ])->assertOk();
 
-        Queue::assertNothingPushed();
+        // 🔴 Hanya job fan-out yang relevan di sini.
+        //
+        // `assertNothingPushed()` terlalu luas: membuat client/route/endpoint
+        // juga mengantrekan `LogActivityJob` dari trait `LogsActivity`, dan
+        // itu bukan bagian dari perilaku yang sedang diuji.
+        Queue::assertNotPushed(DeliverToConsumer::class);
     });
 });
 

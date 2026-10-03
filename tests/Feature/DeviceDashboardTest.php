@@ -3,6 +3,8 @@
 use App\Models\User;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Form as DeviceForm;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Index as DeviceIndex;
+use Bale\Wara\Models\WaraClient;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -39,6 +41,24 @@ function makeSessionDeviceDashboardTest(array $overrides = []): WaraSession
     ], $overrides));
 }
 
+/**
+ * Client wara untuk uji route.
+ *
+ * `api_token_id` sengaja TIDAK diisi di sini: uji router tidak butuh token,
+ * dan mengisinya membuat test ikut bergantung pada tabel `api_tokens`.
+ */
+function makeClientDeviceDashboardTest(array $overrides = []): WaraClient
+{
+    static $counter = 0;
+    $counter++;
+
+    return WaraClient::query()->create(array_merge([
+        'type' => WaraClient::TYPE_SERVICE,
+        'name' => 'Client uji '.$counter,
+        'is_active' => true,
+    ], $overrides));
+}
+
 describe('permission', function () {
     it('menolak Index tanpa permission wara.device.read', function () {
         Livewire::test(DeviceIndex::class)->assertForbidden();
@@ -63,97 +83,112 @@ describe('permission', function () {
     });
 });
 
-describe('penugasan purpose', function () {
+/**
+ * 🔴 Penugasan tujuan layanan TIDAK lagi milik device.
+ *
+ * Dulu blok ini menguji `purpose` di `wara_sessions` dan form Livewire
+ * `Device\Form`. Keduanya dihapus: penugasan pindah ke `wara_routes` yang unik
+ * `(client_id, purpose)`. Yang diuji di sini sekarang adalah sifat-sifat yang
+ * benar-benar baru - satu device bisa dilayani banyak client, dan halaman
+ * device tidak boleh bisa mengubah route milik client mana pun.
+ */
+describe('route per client', function () {
     beforeEach(function () {
         Permission::create(['name' => 'wara.device.update']);
         $this->user->givePermissionTo('wara.device.update');
     });
 
-    it('menyimpan purpose ke device', function () {
+    it('satu device bisa dilayani lebih dari satu client', function () {
         $session = makeSessionDeviceDashboardTest();
+        $clientA = makeClientDeviceDashboardTest(['name' => 'Client A']);
+        $clientB = makeClientDeviceDashboardTest(['name' => 'Client B']);
 
-        Livewire::test(DeviceForm::class, ['session' => $session])
-            ->set('purpose', 'otp')
-            ->call('save')
-            ->assertHasNoErrors();
+        (new WaraRoute)->forceFill([
+            'client_id' => $clientA->getKey(),
+            'purpose' => 'notifikasi',
+            'device_id' => $session->device_id,
+        ])->save();
 
-        expect($session->fresh()->purpose)->toBe('otp');
+        (new WaraRoute)->forceFill([
+            'client_id' => $clientB->getKey(),
+            'purpose' => 'notifikasi',
+            'device_id' => $session->device_id,
+        ])->save();
+
+        expect($session->routes()->count())->toBe(2);
     });
 
-    it('menyimpan purpose null untuk melepas penugasan', function () {
+    it('client yang sama tidak boleh punya purpose yang sama dua kali', function () {
         $session = makeSessionDeviceDashboardTest();
-        $session->forceFill(['purpose' => 'otp'])->save();
+        $client = makeClientDeviceDashboardTest();
 
-        Livewire::test(DeviceForm::class, ['session' => $session])
-            ->set('purpose', null)
-            ->call('save')
-            ->assertHasNoErrors();
+        (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'otp',
+            'device_id' => $session->device_id,
+        ])->save();
 
-        expect($session->fresh()->purpose)->toBeNull();
+        expect(fn () => (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'otp',
+            'device_id' => 'device_lain',
+        ])->save())->toThrow(UniqueConstraintViolationException::class);
     });
 
-    it('menolak purpose yang sudah dilayani device lain', function () {
-        $pertama = makeSessionDeviceDashboardTest();
-        $pertama->forceFill(['purpose' => 'otp'])->save();
-
-        $lain = makeSessionDeviceDashboardTest();
-
-        Livewire::test(DeviceForm::class, ['session' => $lain])
-            ->set('purpose', 'otp')
-            ->call('save')
-            ->assertHasErrors('purpose');
-
-        expect($lain->fresh()->purpose)->toBeNull();
+    it('kolom purpose sudah tidak ada di wara_sessions', function () {
+        // 🔴 Ini yang membuat "clean break" bisa diuji: kalau kolomnya
+        // masih ada, berarti migrasi tidak benar-benar mencabutnya.
+        expect(Schema::hasColumn('wara_sessions', 'purpose'))->toBeFalse();
     });
 
-    it('memvalidasi format purpose', function () {
-        $session = makeSessionDeviceDashboardTest();
+    it('client_id tidak bisa ditulis lewat mass assignment pada route', function () {
+        $client = makeClientDeviceDashboardTest();
 
-        Livewire::test(DeviceForm::class, ['session' => $session])
-            ->set('purpose', ' Purpose Dengan Spasi! ')
-            ->call('save')
-            ->assertHasErrors('purpose');
+        $route = new WaraRoute;
+        $route->fill(['purpose' => 'otp', 'device_id' => 'd', 'client_id' => 'dipaksa']);
 
-        expect($session->fresh()->purpose)->toBeNull();
+        // fill() menyaring berdasarkan $fillable, jadi client_id diabaikan.
+        expect($route->client_id)->not->toBe('dipaksa')
+            ->and($client->getKey())->not->toBe('dipaksa');
     });
 
-    it('purpose tidak bisa ditulis lewat mass assignment', function () {
+    it('sync-devices tidak boleh menyentuh route milik client', function () {
         $session = makeSessionDeviceDashboardTest();
+        $client = makeClientDeviceDashboardTest();
 
-        // fill() menyaring berdasarkan $fillable, jadi purpose diabaikan.
-        $session->fill(['purpose' => 'otp', 'display_name' => 'nama baru']);
-        $session->save();
+        $deviceIdAsli = $session->device_id;
 
-        expect($session->fresh()->purpose)->toBeNull()
-            ->and($session->fresh()->display_name)->toBe('nama baru');
-    });
+        (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'otp',
+            'device_id' => $deviceIdAsli,
+        ])->save();
 
-    it('sync-devices tidak boleh menimpa purpose milik admin', function () {
-        $session = makeSessionDeviceDashboardTest();
-        $session->forceFill(['purpose' => 'otp'])->save();
-
-        // -fillable interplay: sync memakai fill() dengan purpose tidak ada.
+        // Yang di-sync cuma katalog device.
         $session->fill([
-            'device_id' => 'org_2',
             'display_name' => 'nama baru dari gateway',
             'is_logged_in' => true,
         ])->save();
 
-        expect($session->fresh()->purpose)->toBe('otp')
+        $route = WaraRoute::query()->where('purpose', 'otp')->first();
+
+        expect($route->device_id)->toBe($deviceIdAsli)
             ->and($session->fresh()->display_name)->toBe('nama baru dari gateway');
     });
 });
 
 describe('indeks dan kolom tabel', function () {
-    it('purpose punya index unique', function () {
-        $indexes = Schema::getIndexes('wara_sessions');
-        $purposeIndex = collect($indexes)->first(fn ($i) => in_array('purpose', $i['columns'], true));
+    it('wara_routes punya unique (client_id, purpose)', function () {
+        $indexes = Schema::getIndexes('wara_routes');
+        $composite = collect($indexes)->first(
+            fn ($i) => in_array('client_id', $i['columns'], true) && in_array('purpose', $i['columns'], true)
+        );
 
-        expect($purposeIndex)->not->toBeNull()
-            ->and($purposeIndex['unique'])->toBeTrue();
+        expect($composite)->not->toBeNull()
+            ->and($composite['unique'])->toBeTrue();
     });
 
-    it('device_id punya index unique', function () {
+    it('device_id punya index unique di wara_sessions', function () {
         $indexes = Schema::getIndexes('wara_sessions');
         $deviceIndex = collect($indexes)->first(fn ($i) => in_array('device_id', $i['columns'], true));
 
@@ -161,14 +196,20 @@ describe('indeks dan kolom tabel', function () {
             ->and($deviceIndex['unique'])->toBeTrue();
     });
 
-    it('purpose ganda ditolak database', function () {
-        $a = makeSessionDeviceDashboardTest();
-        $a->forceFill(['purpose' => 'otp'])->save();
+    it('wara_clients punya kolom bale_id dan api_token_id', function () {
+        expect(Schema::hasColumn('wara_clients', 'bale_id'))->toBeTrue()
+            ->and(Schema::hasColumn('wara_clients', 'api_token_id'))->toBeTrue();
+    });
 
-        $b = makeSessionDeviceDashboardTest();
+    it('api_tokens punya bale_id supaya token bisa dipetakan ke client', function () {
+        // 🔴 Tanpa kolom ini router tidak mungkin bekerja: `POST /send` tidak
+        // punya cara tahu pemanggilnya client mana.
+        expect(Schema::hasColumn('api_tokens', 'bale_id'))->toBeTrue();
+    });
 
-        expect(fn () => $b->forceFill(['purpose' => 'otp'])->save())
-            ->toThrow(UniqueConstraintViolationException::class);
+    it('wara_webhook_endpoints punya secret yang wajib ada', function () {
+        expect(Schema::hasColumn('wara_webhook_endpoints', 'secret'))->toBeTrue()
+            ->and(Schema::hasColumn('wara_webhook_endpoints', 'enabled'))->toBeTrue();
     });
 });
 

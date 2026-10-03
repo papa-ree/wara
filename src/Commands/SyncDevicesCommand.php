@@ -65,18 +65,22 @@ class SyncDevicesCommand extends Command
             ]);
 
             $label = $device->displayName ?? '(tanpa nama)';
-            $purpose = $session->purpose ? ' purpose='.$session->purpose : ' purpose=(belum ditugaskan)';
 
             if ($dryRun) {
-                $this->line(sprintf('  - Akan disimpan: %s [%s] state=%s%s', $label, $device->sessionId, $device->state->value, $purpose));
+                $this->line(sprintf('  - Akan disimpan: %s [%s] state=%s', $label, $device->sessionId, $device->state->value));
 
                 continue;
             }
 
-            // purpose TIDAK pernah ditulis di sini — itu keputusan admin (PRD §7).
+            // 🔴 Penugasan tujuan layanan TIDAK ada di tabel ini lagi.
+            //
+            // `purpose` pindah ke `wara_routes`, yang unik per CLIENT. Perintah ini
+            // hanya menyusun katalog device: gateway tidak tahu client mana yang
+            // memakai device, dan mengarangnya di sini akan mencangkok
+            // keputusan admin.
             $session->save();
 
-            $this->line(sprintf('  + Tersimpan: %s [%s] state=%s%s', $label, $device->sessionId, $device->state->value, $purpose));
+            $this->line(sprintf('  + Tersimpan: %s [%s] state=%s', $label, $device->sessionId, $device->state->value));
         }
 
         $orphaned = WaraSession::query()
@@ -85,10 +89,8 @@ class SyncDevicesCommand extends Command
             ->get();
 
         foreach ($orphaned as $session) {
-            $purpose = $session->purpose ? ' purpose='.$session->purpose.' (dippertahankan)' : '';
-
             if ($dryRun) {
-                $this->line(sprintf('  - Akan ditandai offline: %s [%s]%s', $session->display_name ?? '(tanpa nama)', $session->device_id, $purpose));
+                $this->line(sprintf('  - Akan ditandai offline: %s [%s]', $session->display_name ?? '(tanpa nama)', $session->device_id));
 
                 continue;
             }
@@ -99,7 +101,7 @@ class SyncDevicesCommand extends Command
                 'is_logged_in' => false,
             ])->save();
 
-            $this->warn(sprintf('  ! Ditandai offline: %s [%s]%s', $session->display_name ?? '(tanpa nama)', $session->device_id, $purpose));
+            $this->warn(sprintf('  ! Ditandai offline: %s [%s]', $session->display_name ?? '(tanpa nama)', $session->device_id));
         }
 
         $this->newLine();

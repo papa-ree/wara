@@ -124,24 +124,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Consumer Fan-Out (§12)
+    | Fan-Out (§12)
     |--------------------------------------------------------------------------
     |
-    | Konfigurasi aplikasi client yang menerima webhook event dari Bale\Wara.
-    | `enabled` wajib false secara default.
+    | 🔴 DULUNYA ADA BLOCK `consumers` DI SINI, DAN SEKARANG SUDAH DIHAPUS.
+    |
+    | URL, secret, dan daftar event tiap client pernah hidup di file ini, yang
+    | berarti tidak bisa diatur per CLIENT dan tidak bisa dibuat dari UI admin.
+    | Sekarang semuanya ada di `wara_webhook_endpoints`, dan `enabled` di sana
+    | yang menentukan on/off per package.
+    |
+    | Yang TETAP di config cuma perilaku retry/timeout jaringan. Ini memang
+    | properti gateway, bukan properti client - membiarkan admin mengubahnya
+    | dari UI akan jadi permukaan serang yang tidak perlu ada.
     |
     */
 
-    'consumers' => [
-        'srikandi' => [
-            'enabled' => (bool) env('WARA_CONSUMER_SRIKANDI_ENABLED', false),
-            'url' => env('WARA_CONSUMER_SRIKANDI_URL'),
-            'secret' => env('WARA_CONSUMER_SRIKANDI_SECRET'),
-            'events' => ['message'],
-            'timeout' => 5,
-            'tries' => 3,
-            'backoff' => 30,
-        ],
+    'fanout' => [
+        'timeout' => (int) env('WARA_FANOUT_TIMEOUT', 5),
+        'tries' => (int) env('WARA_FANOUT_TRIES', 3),
+        'backoff' => (int) env('WARA_FANOUT_BACKOFF', 30),
     ],
 
 ];

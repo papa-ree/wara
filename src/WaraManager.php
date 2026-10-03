@@ -13,8 +13,10 @@ use Bale\Wara\Exceptions\DeviceNotReadyException;
 use Bale\Wara\Exceptions\GatewayException;
 use Bale\Wara\Exceptions\TooManyAttemptsException;
 use Bale\Wara\Exceptions\WaraException;
+use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraSession;
+use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\Support\PhoneNumber;
 use Bale\Wara\Support\SendPacer;
 use Illuminate\Support\Facades\Log;
@@ -31,6 +33,7 @@ class WaraManager
         protected WaraGateway $gateway,
         protected PhoneNumber $phone,
         protected SendPacer $pacer,
+        protected DeviceRouter $router,
     ) {}
 
     /**
@@ -56,6 +59,7 @@ class WaraManager
         ?string $deviceId = null,
         ?string $sessionKey = null,
         ?string $notification = null,
+        ?WaraClient $client = null,
     ): SendResult {
         $normalized = $this->phone->toInternational($phone);
 
@@ -63,7 +67,7 @@ class WaraManager
             throw WaraException::misconfigured('nomor tujuan', 'nomor telepon valid', $phone);
         }
 
-        $session = $this->resolveDevice($purpose, $deviceId);
+        $session = $this->resolveDevice($purpose, $deviceId, $client);
 
         $this->guardDeviceBackoff($session);
         $this->guardSessionAttempts($normalized, $sessionKey, $session);
@@ -127,13 +131,16 @@ class WaraManager
         ?string $purpose = null,
         ?string $deviceId = null,
         ?string $sessionKey = null,
+        ?WaraClient $client = null,
     ): SendResult {
         return $this->sendMessage(
             $phone,
             $this->buildOtpMessage($otpCode),
             $purpose,
             $deviceId,
-            $sessionKey
+            $sessionKey,
+            null,
+            $client
         );
     }
 
@@ -185,19 +192,36 @@ class WaraManager
     }
 
     /**
-     * Resolusi device pengirim (PRD §6.5).
+     * Resolusi device pengirim.
      *
-     * Urutan prioritas TIDAK BOLEH diubah (§6.5.1):
+     * 🔴 URUTAN INI BERUBAH, dan itu disengaja.
+     *
+     * Schema lama menjawab "device mana untuk purpose ini?" secara global,
+     * lalu jatuh ke `default_device_id`. Itu tidak bisa jadi router: begitu
+     * ada dua client, keduanya akan berebut device yang sama, dan tidak ada
+     * cara tahu client mana yang sebenarnya berhak.
+     *
+     * Sekarang urutannya:
      *   1. `$deviceId` eksplisit
-     *   2. device bertanda `$purpose`
-     *   3. `default_device_id` sebagai jaring pengaman
-     *   4. `$purpose` null -> `default_device_id`
+     *   2. `$client` + `$purpose` lewat `wara_routes`
+     *   3. jaring pengaman `default_device_id`
      *
-     * Setiap hasil wajib lolos gerbang §6.5.2 tanpa fallback.
+     * Baris 2 TIDAK diam-diam jatuh ke baris 3 kalau client tidak punya
+     * route-nya: itu justru kesalahan konfigurasi yang harus terlihat.
+     * Jaring pengaman hanya dipakai kalau `$client` memang tidak diberikan
+     * (jalur internal, mis. `WaraChannel`).
+     *
+     * Setiap hasil wajib lolos gerbang §6.5.2 tanpa fallback ke device lain.
+     *
+     * @param  WaraClient|null  $client  Client yang memanggil, atau null untuk
+     *                                   jalur internal yang tidak punya client.
      */
-    public function resolveDevice(?string $purpose = null, ?string $deviceId = null): WaraSession
-    {
-        $context = $this->describeContext($purpose, $deviceId);
+    public function resolveDevice(
+        ?string $purpose = null,
+        ?string $deviceId = null,
+        ?WaraClient $client = null,
+    ): WaraSession {
+        $context = $this->describeContext($purpose, $deviceId, $client);
 
         if (filled($deviceId)) {
             $session = WaraSession::query()->where('device_id', $deviceId)->first();
@@ -205,11 +229,11 @@ class WaraManager
             if ($session === null) {
                 throw DeviceNotFoundException::forSessionId($deviceId);
             }
-        } elseif (filled($purpose)) {
-            $session = WaraSession::query()->where('purpose', $purpose)->first();
-
-            // Baris 3 §6.5.1: jatuh ke jaring pengaman, BUKAN gagal keras.
-            $session ??= $this->resolveDefaultDevice($context);
+        } elseif ($client !== null && filled($purpose)) {
+            // 🔴 Gagal keras kalau route-nya tidak ada. Mengganti dengan
+            // `default_device_id` di sini berarti pesan terkirim dari nomor yang
+            // tidak Asked - dan penerima tidak akan pernah tahu.
+            $session = $this->router->resolveSession($client, $purpose);
         } else {
             $session = $this->resolveDefaultDevice($context);
         }
@@ -341,11 +365,22 @@ class WaraManager
     /**
      * Label konteks untuk pesan exception — wajib menyebut tujuan/device yang
      * bermasalah agar admin tahu harus memperbaiki apa (§6.5.2).
+     *
+     * 🔴 Client ikut disebut. Tanpa itu, dua client yang sama-sama memakai
+     * purpose `notifikasi` akan menghasilkan pesan error yang identik, dan
+     * admin tidak akan tahu route client mana yang bermasalah.
      */
-    protected function describeContext(?string $purpose, ?string $deviceId): string
-    {
+    protected function describeContext(
+        ?string $purpose,
+        ?string $deviceId,
+        ?WaraClient $client = null,
+    ): string {
         if (filled($deviceId)) {
             return sprintf('device "%s"', $deviceId);
+        }
+
+        if ($client !== null && filled($purpose)) {
+            return sprintf('client "%s" purpose "%s"', $client->name, $purpose);
         }
 
         if (filled($purpose)) {

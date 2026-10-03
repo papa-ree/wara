@@ -1,0 +1,140 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+
+/**
+ * Tabel `wara_routes` + CABUTNYA `wara_sessions.purpose`.
+ *
+ * 🔴 CLEAN BREAK. `wara_sessions.purpose` yang unik GLOBAL dihapus, bukan
+ * ditambal. Konsekuensinya: satu device tidak lagi "dipakai" oleh satu
+ * purpose di seluruh sistem, dan menambah klien baru tidak mengubah arti
+ * purpose untuk semua klien.
+ *
+ * Data `purpose` yang ada dipindahkan lebih dulu ke `wara_routes` di bawah satu
+ * client bawaan, supaya tidak ada penugasan device yang hilang diam-diam.
+ *
+ * Why unik PER CLIENT, bukan global: `UNIQUE (client_id, purpose)` inilah yang
+ * menggantikan unique global yang lama. Klien A dan klien B boleh sama-sama
+ * memakai device yang sama untuk `notifikasi` - itu justru yang membuat
+ * `bale/wara` berguna sebagai router umum.
+ */
+return new class extends Migration
+{
+    /** Nama client bawaan yang menerima penugasan purpose lama. */
+    private const DEFAULT_CLIENT_NAME = 'Wara (bawaan)';
+
+    public function up(): void
+    {
+        Schema::create('wara_routes', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+
+            $table->uuid('client_id');
+
+            // Tujuan layanan, mis. `otp`, `notifikasi`.
+            $table->string('purpose', 64);
+
+            // Nama device (session id) dari `wara_sessions.device_id`.
+            $table->string('device_id', 191);
+
+            // Mematikan route untuk outbound TIDAK menghapus kolom device: ini
+            // keputusan operasional sementara, dan kehilangan device id akan
+            // memaksa admin menebak ulang.
+            $table->boolean('outbound_enabled')->default(true);
+
+            // Default `false`: menambah device tidak boleh diam-diam membuat
+            // traffic masuk ke server yang belum tentu siap.
+            $table->boolean('inbound_webhook_enabled')->default(false);
+
+            $table->timestamps();
+
+            $table->unique(['client_id', 'purpose']);
+            $table->index('device_id');
+        });
+
+        $this->migrateExistingPurposes();
+
+        // Bersihkan tabel tujuan sebelum REFERENCES ke client, supaya tidak ada
+        // `wara_routes` yatim kalau migrasi ini di-rollback sebagian.
+        if (Schema::hasColumn('wara_sessions', 'purpose')) {
+            Schema::table('wara_sessions', function (Blueprint $table) {
+                $table->dropUnique(['purpose']);
+                $table->dropColumn('purpose');
+            });
+        }
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('wara_routes');
+    }
+
+    /**
+     * Pindahkan `wara_sessions.purpose` yang sudah ada ke `wara_routes`.
+     *
+     * Dijalankan sebagai bagian dari migrasi yang sama supaya tidak mungkin
+     * ada keadaan setengah: kalau proses mati di tengah, `purpose` masih ada
+     * dan tidak ada route yang pernah dibuat, jadi migrate ulang aman.
+     */
+    private function migrateExistingPurposes(): void
+    {
+        if (! Schema::hasColumn('wara_sessions', 'purpose')) {
+            return;
+        }
+
+        $assigned = DB::table('wara_sessions')
+            ->whereNotNull('purpose')
+            ->where('purpose', '<>', '')
+            ->get(['device_id', 'purpose']);
+
+        if ($assigned->isEmpty()) {
+            return;
+        }
+
+        $clientId = $this->ensureDefaultClient();
+        $now = now();
+
+        foreach ($assigned as $row) {
+            DB::table('wara_routes')->insert([
+                'id' => (string) Str::uuid(),
+                'client_id' => $clientId,
+                'purpose' => $row->purpose,
+                'device_id' => $row->device_id,
+                'outbound_enabled' => true,
+                'inbound_webhook_enabled' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
+    }
+
+    private function ensureDefaultClient(): string
+    {
+        $existing = DB::table('wara_clients')
+            ->where('type', 'service')
+            ->where('name', self::DEFAULT_CLIENT_NAME)
+            ->value('id');
+
+        if (is_string($existing) && $existing !== '') {
+            return $existing;
+        }
+
+        $id = (string) Str::uuid();
+
+        DB::table('wara_clients')->insert([
+            'id' => $id,
+            'bale_id' => null,
+            'type' => 'service',
+            'api_token_id' => null,
+            'name' => self::DEFAULT_CLIENT_NAME,
+            'is_active' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $id;
+    }
+};

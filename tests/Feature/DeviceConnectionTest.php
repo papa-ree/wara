@@ -2,6 +2,8 @@
 
 use App\Models\User;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Form as DeviceForm;
+use Bale\Wara\Models\WaraClient;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -93,20 +95,45 @@ describe('tes koneksi di halaman edit device', function () {
             ->and($session->last_seen_at)->not->toBeNull();
     });
 
-    it('tidak mengubah purpose milik admin', function () {
+    it('tidak mengubah route milik client', function () {
+        // 🔴 `purpose` tidak lagi menempel pada device, jadi yang harus
+        // dijaga di sini adalah route milik client: tes koneksi tidak boleh
+        // mengubah keputusan admin di halaman Client.
         $session = makeDeviceSession();
-        $session->forceFill(['purpose' => 'otp'])->save();
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Client tes koneksi',
+            'is_active' => true,
+        ]);
+
+        (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'otp',
+            'device_id' => $session->device_id,
+        ])->save();
 
         fakeGatewayWithJid($session->jid);
 
         Livewire::test(DeviceForm::class, ['session' => $session])->call('testConnection');
 
-        expect($session->fresh()->purpose)->toBe('otp');
+        expect(WaraRoute::query()->where('purpose', 'otp')->first()->device_id)
+            ->toBe($session->device_id);
     });
 
-    it('menandai device offline tanpa mengubah purpose', function () {
+    it('menandai device offline tanpa mengubah route', function () {
         $session = makeDeviceSession();
-        $session->forceFill(['purpose' => 'otp'])->save();
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Client tes offline',
+            'is_active' => true,
+        ]);
+
+        $route = new WaraRoute;
+        $route->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'otp',
+            'device_id' => $session->device_id,
+        ])->save();
 
         fakeGatewayWithJid($session->jid, 'disconnected');
 
@@ -118,7 +145,7 @@ describe('tes koneksi di halaman edit device', function () {
 
         expect($session->is_logged_in)->toBeFalse()
             ->and($session->is_connected)->toBeFalse()
-            ->and($session->purpose)->toBe('otp');
+            ->and($route->fresh()->device_id)->toBe($session->device_id);
     });
 
     it('gateway tidak dapat dihubungi memberi pesan error', function () {

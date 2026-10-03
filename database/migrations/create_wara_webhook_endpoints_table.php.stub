@@ -1,0 +1,56 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Tabel `wara_webhook_endpoints` - sumber kebenaran webhook SELAIN config.
+ *
+ * 🔴 INI YANG MEMBATASI KEBIJAKAN "ON/OFF PER PACKAGE".
+ *
+ * Sebelumnya webhook client dikonfigurasi lewat `config('wara.consumers')`,
+ * artinya URL, secret, dan daftar event hidup di file config/env. Tiga
+ * akibatnya:
+ *
+ *   1. Tidak bisa diatur per CLIENT - hanya per aplikasi yang di-deploy.
+ *   2. Tidak bisa dibuat atau diubah dari UI admin; harus edit file + reload.
+ *   3. `enabled` menentukan on/off secara global, padahal tiap package punya
+ *      siklus rilis sendiri.
+ *
+ * `enabled` di sini yang memenuhi keputusan itu. Default `false`, sama
+ * seperti default consumer lama: deploy package tidak boleh diam-diam
+ * mengirim traffic ke server yang belum tentu siap.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('wara_webhook_endpoints', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+
+            $table->uuid('client_id')->index();
+
+            $table->string('url', 1024);
+
+            // 🔴 `encrypted` cast, bukan polos. Client menghitung HMAC dengan
+            // secret yang sama, dan tidak ada proses yang perlu membandingkan
+            // secret secara teks - jadi tidak ada alasan menyimpannya polos.
+            $table->text('secret');
+
+            // null / kosong = terima semua event.
+            $table->json('events')->nullable();
+
+            $table->boolean('enabled')->default(false);
+
+            $table->timestamps();
+
+            $table->index(['client_id', 'enabled']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('wara_webhook_endpoints');
+    }
+};

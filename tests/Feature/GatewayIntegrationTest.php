@@ -4,7 +4,9 @@ use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\GatewayException;
 use Bale\Wara\Exceptions\WaraException;
+use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraLog;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraManager;
 use Bale\Wara\WaraServiceProvider;
@@ -45,30 +47,51 @@ function makeSessionGatewayIntegrationTest(array $overrides = []): WaraSession
     return $session;
 }
 
+function makeClientGatewayIntegrationTest(): WaraClient
+{
+    return WaraClient::query()->create([
+        'type' => WaraClient::TYPE_SERVICE,
+        'name' => 'Client gateway',
+        'is_active' => true,
+    ]);
+}
+
+function makeRouteGatewayIntegrationTest(WaraClient $client, string $deviceId): WaraRoute
+{
+    $route = new WaraRoute;
+
+    $route->forceFill([
+        'client_id' => $client->getKey(),
+        'purpose' => 'otp',
+        'device_id' => $deviceId,
+    ])->save();
+
+    return $route;
+}
 describe('GowaGateway — header eksplisit (PRD §6.3)', function () {
     it('mengirim X-Device-Id pada setiap call kirim', function () {
         Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-1'], 200)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        $this->manager->sendMessage('628999888777', 'halo', 'otp');
+        $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2');
 
         Http::assertSent(fn ($request) => $request->hasHeader('X-Device-Id', 'org_2'));
     });
 
     it('mengirim nomor tujuan dengan sufiks JID', function () {
         Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-1'], 200)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        $this->manager->sendMessage('081999888777', 'halo', 'otp');
+        $this->manager->sendMessage('081999888777', 'halo', 'otp', 'org_2');
 
         Http::assertSent(fn ($request) => $request['phone'] === '6281999888777@s.whatsapp.net');
     });
 
     it('memakai basic auth dari WARA_API_KEY', function () {
         Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-1'], 200)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        $this->manager->sendMessage('628999888777', 'halo', 'otp');
+        $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2');
 
         Http::assertSent(fn ($request) => str_contains($request->header('Authorization')[0] ?? '', 'Basic '));
     });
@@ -77,33 +100,33 @@ describe('GowaGateway — header eksplisit (PRD §6.3)', function () {
 describe('GowaGateway — device tidak ditemukan (PRD §6.5.3)', function () {
     it('DEVICE_NOT_FOUND diterjemahkan jadi DeviceNotFoundException', function () {
         Http::fake(['gateway.test/*' => Http::response(['code' => 'DEVICE_NOT_FOUND'], 404)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp'))
+        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2'))
             ->toThrow(DeviceNotFoundException::class);
     });
 
     it('DEVICE_ID_REQUIRED dianggap bug sisi Bale, bukan kondisi device', function () {
         Http::fake(['gateway.test/*' => Http::response(['code' => 'DEVICE_ID_REQUIRED'], 400)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp'))
+        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2'))
             ->toThrow(GatewayException::class, 'sudah mengirimnya');
     });
 
     it('HTTP error lain menjadi GatewayException dengan status', function () {
         Http::fake(['gateway.test/*' => Http::response('boom', 500)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp'))
+        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2'))
             ->toThrow(GatewayException::class, 'HTTP 500');
     });
 
     it('body non-JSON ditolak dengan pesan jelas', function () {
         Http::fake(['gateway.test/*' => Http::response('<html>bukan json</html>', 200)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp'))
+        expect(fn () => $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2'))
             ->toThrow(GatewayException::class, 'bukan JSON');
     });
 });
@@ -111,9 +134,9 @@ describe('GowaGateway — device tidak ditemukan (PRD §6.5.3)', function () {
 describe('pencatatan pesan keluar (PRD §4, §7)', function () {
     it('mencatat wara_logs dengan direction out', function () {
         Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-9'], 200)]);
-        $session = makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        $session = makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        $result = $this->manager->sendMessage('628999888777', 'halo', 'otp');
+        $result = $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2');
 
         $log = WaraLog::query()->first();
 
@@ -127,11 +150,11 @@ describe('pencatatan pesan keluar (PRD §4, §7)', function () {
 
     it('gateway menolak -> tetap tercatat dengan status rejected', function () {
         Http::fake(['gateway.test/*' => Http::response(['code' => 'SOMETHING'], 422)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
         // Terlempar, tapi log tetap harus ada untuk kebutuhan forensik.
         try {
-            $this->manager->sendMessage('628999888777', 'halo', 'otp');
+            $this->manager->sendMessage('628999888777', 'halo', 'otp', 'org_2');
         } catch (GatewayException) {
             // diharapkan
         }
@@ -145,9 +168,9 @@ describe('pencatatan pesan keluar (PRD §4, §7)', function () {
 
     it('sendOtp memakai template standar', function () {
         Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-otp'], 200)]);
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        $this->manager->sendOtp('628999888777', '123456', 'otp');
+        $this->manager->sendOtp('628999888777', '123456', 'otp', 'org_2');
 
         Http::assertSent(function ($request) {
             return str_contains($request['message'], '123456');
@@ -156,9 +179,9 @@ describe('pencatatan pesan keluar (PRD §4, §7)', function () {
 
     it('nomor tujuan tidak valid ditolak sebelum menyentuh gateway', function () {
         Http::fake();
-        makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'purpose' => 'otp']);
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_2']);
 
-        expect(fn () => $this->manager->sendMessage('bukan-nomor', 'halo', 'otp'))
+        expect(fn () => $this->manager->sendMessage('bukan-nomor', 'halo', 'otp', 'org_2'))
             ->toThrow(WaraException::class);
 
         Http::assertNothingSent();
@@ -249,7 +272,8 @@ describe('wara:sync-devices (PRD §7.1)', function () {
 
     it('device yang hilang ditandai offline, BUKAN dihapus', function () {
         $lama = makeSessionGatewayIntegrationTest(['device_id' => 'org_lama', 'jid' => '6285@s.whatsapp.net']);
-        $lama->forceFill(['purpose' => 'otp'])->save();
+        $client = makeClientGatewayIntegrationTest();
+        $route = makeRouteGatewayIntegrationTest($client, 'org_lama');
 
         Http::fake(['gateway.test/*' => Http::response([
             'data' => [
@@ -264,13 +288,14 @@ describe('wara:sync-devices (PRD §7.1)', function () {
         expect(WaraSession::query()->count())->toBe(2)
             ->and($lama->is_present)->toBeFalse()
             ->and($lama->is_logged_in)->toBeFalse()
-            // Purpose admin harus tetap utuh.
-            ->and($lama->purpose)->toBe('otp');
+            // Route milik client harus tetap utuh walau device-nya offline.
+            ->and($route->fresh()->device_id)->toBe('org_lama');
     });
 
-    it('sync tidak pernah menimpa purpose milik admin', function () {
+    it('sync tidak pernah menimpa route milik client', function () {
         $session = makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'jid' => '6285126061182@s.whatsapp.net', 'display_name' => 'nama lama']);
-        $session->forceFill(['purpose' => 'otp'])->save();
+        $client = makeClientGatewayIntegrationTest();
+        $route = makeRouteGatewayIntegrationTest($client, 'org_2');
 
         Http::fake(['gateway.test/*' => Http::response([
             'data' => [
@@ -283,7 +308,7 @@ describe('wara:sync-devices (PRD §7.1)', function () {
         $session->refresh();
 
         expect($session->display_name)->toBe('nama dari gateway')
-            ->and($session->purpose)->toBe('otp');
+            ->and($route->fresh()->device_id)->toBe('org_2');
     });
 
     it('gateway tidak dapat dihubungi tidak mengubah data lama', function () {

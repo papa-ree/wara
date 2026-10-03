@@ -10,7 +10,7 @@ use Bale\Wara\Commands\SyncDevicesCommand;
 use Bale\Wara\Contracts\WaraGateway;
 use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Gateways\GowaGateway;
-use Bale\Wara\Support\ConsumerConfig;
+use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\Support\PhoneNumber;
 use Bale\Wara\Support\SendPacer;
 use Illuminate\Notifications\ChannelManager;
@@ -30,12 +30,17 @@ class WaraServiceProvider extends ServiceProvider
         $this->app->singleton(PhoneNumber::class);
         $this->app->singleton(SendPacer::class);
 
+        // 🔴 Router device. Singleton supaya cache dan reverse mapping yang
+        // dibangun di dalamnya konsisten dalam satu request.
+        $this->app->singleton(DeviceRouter::class);
+
         $this->app->singleton(WaraGateway::class, GowaGateway::class);
 
         $this->app->singleton(WaraManager::class, fn ($app) => new WaraManager(
             $app->make(WaraGateway::class),
             $app->make(PhoneNumber::class),
             $app->make(SendPacer::class),
+            $app->make(DeviceRouter::class),
         ));
 
         // Kanal notifikasi Laravel (PRD §13). Dibuat lewat container supaya
@@ -69,6 +74,7 @@ class WaraServiceProvider extends ServiceProvider
         $this->offerPublishing();
         $this->scheduleJobs();
         $this->registerLivewireComponents();
+        $this->registerApiScopes();
     }
 
     /**
@@ -77,6 +83,30 @@ class WaraServiceProvider extends ServiceProvider
      * src/Livewire/Pages/Landlord/Device/Index.php
      *   => <livewire:wara.pages.landlord.device.index />
      */
+    /**
+     * Scope API milik `bale/wara`.
+     *
+     * 🔴 Didaftarkan lewat helper `registerApiScopes()` milik `bale/api`, bukan
+     * dengan menyentuh registry-nya, supaya `bale/api` tidak perlu tahu domain
+     * package lain.
+     *
+     * `wara.send` sengaja terpisah dari `wara.routes.write`: token yang hanya
+     * boleh mengirim pesan tidak perlu wewenang mengubah device mana yang dipakai -
+     * dan sebaliknya.
+     */
+    protected function registerApiScopes(): void
+    {
+        if (! function_exists('registerApiScopes')) {
+            return;
+        }
+
+        registerApiScopes('wara', [
+            'wara.send' => 'Mengirim pesan WhatsApp atas nama client (POST /api/v1/wara/send).',
+            'wara.routes.read' => 'Membaca peta purpose ke device milik client sendiri.',
+            'wara.routes.write' => 'Memetakan purpose ke device milik client sendiri.',
+        ]);
+    }
+
     protected function registerLivewireComponents(): void
     {
         $namespace = 'Bale\\Wara\\Livewire';
@@ -129,7 +159,7 @@ class WaraServiceProvider extends ServiceProvider
     protected function validateConfig(): void
     {
         $this->validateDefaultDeviceId();
-        $this->validateConsumers();
+
     }
 
     /**
@@ -157,37 +187,23 @@ class WaraServiceProvider extends ServiceProvider
     }
 
     /**
-     * Validasi consumer fan-out saat boot (PRD §12.2).
+     * 🔴 VALIDASI CONSUMER FAN-OUT DIHAPUS DARI BOOT.
      *
-     * Hanya consumer `enabled=true` yang diperiksa. Consumer `enabled=false`
-     * boleh punya `url`/`secret` kosong — itulah default-nya, dan mengulang
-     * semuanya akan membuat package gagal boot hanya karena dikonfigurasi.
+     * Dulu method ini membacanya `config('wara.consumers')` dan gagal boot
+     * kalau URL-nya tidak https atau secret-nya pendek. Sekarang endpoint-nya
+     * ada di `wara_webhook_endpoints` dan diisi lewat UI admin, jadi tidak
+     * ada lagi yang bisa dibaca di boot.
      *
-     * Yang digagalkan di sini: URL non-https ke host non-lokal (risiko SSRF)
-     * dan secret yang kosong/pendek (kirim tanpa tanda tangan yang berarti).
+     * Aturan yang sama TIDAK ikut hilang - ia pindah ke
+     * `WaraWebhookEndpoint::assertUrlAllowed()` dan `assertSecretUsable()`,
+     * dan dipanggil dua kali: saat admin menyimpan endpoint (supaya input salah
+     * ditolak di tempat yang salah ketik), dan lagi di dalam job
+     * saat benar-benar mengirim (supaya job yang terlanjur tersimpan di queue
+     * tidak bisa melewati guardrail setelah datanya diubah).
+     *
+     * Melakukan query database di boot juga berisiko: `php artisan migrate`
+     * jalan sebelum tabel ada.
      */
-    protected function validateConsumers(): void
-    {
-        $consumers = config('wara.consumers', []);
-
-        if (! is_array($consumers)) {
-            return;
-        }
-
-        foreach ($consumers as $name => $rawConfig) {
-            $name = (string) $name;
-
-            if (! is_array($rawConfig) || ! ConsumerConfig::isEnabled($rawConfig)) {
-                continue;
-            }
-
-            $config = ConsumerConfig::normalize($rawConfig);
-
-            ConsumerConfig::assertUrlAllowed($name, $config['url']);
-            ConsumerConfig::assertSecretUsable($name, $config['secret']);
-        }
-    }
-
     protected function offerPublishing(): void
     {
         if (! $this->app->runningInConsole()) {

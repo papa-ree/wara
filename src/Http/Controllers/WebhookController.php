@@ -6,10 +6,13 @@ use Bale\Wara\Contracts\WaraGateway;
 use Bale\Wara\Events\WaraIncomingMessage;
 use Bale\Wara\Jobs\DeliverToConsumer;
 use Bale\Wara\Models\WaraLog;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
-use Bale\Wara\Support\ConsumerConfig;
+use Bale\Wara\Models\WaraWebhookEndpoint;
+use Bale\Wara\Support\DeviceRouter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -242,43 +245,92 @@ class WebhookController
         ?string $deviceId,
         array $data,
     ): void {
+        if ($deviceId === null || $deviceId === '') {
+            return;
+        }
+
         $messageId = $this->stringOrNull(
             $data['id'] ?? $data['message_id'] ?? null
         );
 
-        $consumers = config('wara.consumers', []);
-
-        if (! is_array($consumers)) {
-            return;
-        }
-
-        foreach ($consumers as $name => $rawConfig) {
-            $config = ConsumerConfig::normalize(is_array($rawConfig) ? $rawConfig : []);
-
-            if (! ConsumerConfig::isEnabled($config)) {
-                continue;
-            }
-
-            if (! ConsumerConfig::subscribesTo($config['events'], $event !== '' ? $event : null)) {
+        // 🔴 INI DIGANTI dari `config('wara.consumers')`.
+        //
+        // Dulu fan-out mencoba semua consumer yang ada di config dan rely
+        // enabled global. Sekarang endpoint benar-benar milik CLIENT, dan
+        // kelompok yang menerima event ditentukan oleh ROUTE: device ini +
+        // purpose ini, dengan `inbound_webhook_enabled = true`.
+        //
+        // Konsekuensi yang dimaksud: dua client boleh memakai device yang sama
+        // untuk `notifikasi`, dan keduanya menerima event itu - masing-masing
+        // dengan keputusan on/off-nya sendiri.
+        foreach ($this->endpointsForDevice($deviceId) as $endpoint) {
+            if (! WaraWebhookEndpoint::subscribesTo($endpoint->events, $event !== '' ? $event : null)) {
                 continue;
             }
 
             try {
-                DeliverToConsumer::dispatch(
-                    (string) $name,
+                // 🔴 Dispatch DIPAKSA di dalam blok try.
+                //
+                // `Dispatchable::dispatch()` mengembalikan `PendingDispatch`,
+                // dan pekerjaan sebenarnya baru jalan saat objek itu
+                // dihancurkan. Kalau dibiarkan sebagai nilai balik yang tidak
+                // dipakai, exception dari `JobQueueing` bisa muncul di
+                // destructor - DI LUAR try - dan membalas 500 ke GOWA.
+                //
+                // GOWA punya timeout webhook dan mengulang pada 500, jadi
+                // kegagalan enqueue yang lolos ke sini berarti event yang sama
+                // terkirim berulang tanpa henti.
+                $pending = DeliverToConsumer::dispatch(
+                    (string) $endpoint->getKey(),
                     $rawBody,
                     $event !== '' ? $event : null,
                     $deviceId,
                     $messageId,
                 );
+
+                unset($pending);
             } catch (\Throwable $e) {
-                Log::error('Fan-out Wara: gagal mengantrekan event ke consumer.', [
-                    'consumer' => $name,
+                Log::error('Fan-out Wara: gagal mengantrekan event ke endpoint.', [
+                    'endpoint_id' => $endpoint->getKey(),
+                    'client_id' => $endpoint->client_id,
                     'event' => $event,
                     'error' => $e->getMessage(),
                 ]);
             }
         }
+    }
+
+    /**
+     * Endpoint yang berhak menerima event inbound untuk sebuah device.
+     *
+     * Device + purpose -> route -> client -> endpoints yang aktif. Route
+     * menentukan siapa yang berhak, endpoint menentukan ke mana dikirim.
+     *
+     * @return Collection<int, WaraWebhookEndpoint>
+     */
+    protected function endpointsForDevice(string $deviceId): Collection
+    {
+        $purposes = app(DeviceRouter::class)->purposesForDevice($deviceId);
+
+        if ($purposes === []) {
+            return collect();
+        }
+
+        $routeClientIds = WaraRoute::query()
+            ->where('device_id', $deviceId)
+            ->where('inbound_webhook_enabled', true)
+            ->pluck('client_id')
+            ->unique()
+            ->all();
+
+        if ($routeClientIds === []) {
+            return collect();
+        }
+
+        return WaraWebhookEndpoint::query()
+            ->whereIn('client_id', $routeClientIds)
+            ->where('enabled', true)
+            ->get();
     }
 
     /**
