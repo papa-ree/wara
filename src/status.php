@@ -30,10 +30,10 @@ return [
 
     'title' => 'Status bale/wara',
 
-    'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai; '
+    'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13; '
         .'sisa yang tercatat adalah persiapan produksi, bukan fitur yang belum dibangun.',
 
-    'updated_at' => '2026-10-01',
+    'updated_at' => '2026-10-04',
 
     'doc' => [
         'label' => 'Dokumen',
@@ -69,10 +69,12 @@ return [
                     'note' => 'Verifikasi HMAC berjalan sebelum payload disentuh sama sekali.',
                 ],
                 [
-                    'label' => 'Fase 4 — Migration, model, dashboard `purpose`',
+                    'label' => 'Fase 4 — Migration, model, dashboard admin',
                     'status' => 'done',
                     'meta' => 'PRD §7',
-                    'note' => 'Kolom `purpose` sengaja tidak ada di `$fillable` — hanya admin yang boleh mengisinya.',
+                    'note' => 'Cakupan berubah: penugasan `purpose` pindah ke halaman `Wara > Client` '
+                        .'karena `wara_sessions.purpose` sudah dihapus. Client, route, dan endpoint webhook '
+                        .'sekarang dikelola dari sana.',
                 ],
                 [
                     'label' => 'Fase 5 — `wara:sync-devices`',
@@ -91,10 +93,12 @@ return [
                     'meta' => 'PRD §10',
                 ],
                 [
-                    'label' => 'Fase 8 — Fan-out ke consumer',
+                    'label' => 'Fase 8 — Fan-out ke client',
                     'status' => 'done',
                     'meta' => 'PRD §12',
-                    'note' => 'HMAC dihitung atas raw body byte-wise. Consumer Srikandi sengaja dibiarkan `enabled=false`.',
+                    'note' => 'HMAC dihitung atas raw body byte-wise. Endpoint didaftarkan per-client di '
+                        .'`wara_webhook_endpoints`, bukan config — dan Srikandi tidak didaftarkan sama sekali '
+                        .'karena MFA-nya TOTP aplikasi autentikator.',
                 ],
                 [
                     'label' => 'Fase 9 — `WaraChannel` notifikasi Laravel',
@@ -108,6 +112,32 @@ return [
                     'meta' => 'TOPIK §7',
                     'note' => 'Dibangun untuk `bale/srikandi`. Dispatch di luar transaksi, dibungkus `try/catch` '
                         .'supaya kegagalan listener tidak mengubah `200` menjadi `500`.',
+                ],
+                [
+                    'label' => 'Fase 11 — Router per-client',
+                    'status' => 'done',
+                    'meta' => 'PRD §6.5, §7.1a',
+                    'note' => 'Tiga tabel baru: `wara_clients`, `wara_routes`, `wara_webhook_endpoints`. '
+                        .'Penugasan pindah dari `wara_sessions.purpose` yang unik GLOBAL ke '
+                        .'`UNIQUE (client_id, purpose)` — sekarang satu device boleh dipakai banyak client. '
+                        .'Client tanpa route gagal keras, tidak jatuh ke `default_device_id`.',
+                ],
+                [
+                    'label' => 'Fase 12 — Buang kolom organisasi dari `api_tokens` & `srikandi_naskah`',
+                    'status' => 'done',
+                    'meta' => 'PRD §12.8',
+                    'note' => '`api_tokens.bale_id` dicabut: `bale/api` tidak boleh terikat ke `bale/cms`, '
+                        .'dan token untuk sistem pihak ketiga tidak punya `bale_lists` sama sekali. '
+                        .'Identitas lengkap (token + organisasi) hidup berdampingan di `wara_clients`.',
+                ],
+                [
+                    'label' => 'Fase 13 — UI manajemen client + client per package',
+                    'status' => 'done',
+                    'meta' => 'PLAN §16',
+                    'note' => 'Halaman `Wara > Client` terdaftar di sidebar SEBELUM Device — `purpose` tidak lagi '
+                        .'kolom device, jadi admin yang membuka Device dulu akan mencari kolom yang memang '
+                        .'tidak ada. Device jadi read-only. Tiap package punya client sendiri; '
+                        .'`srikandi:install` membuat `Srikandi (Package)`. `Kosadata` & `Wago` di-uninstall.',
                 ],
             ],
         ],
@@ -157,6 +187,44 @@ return [
                     'label' => 'Endpoint `verified` → `consumed`',
                     'status' => 'open',
                     'note' => 'Milik `bale/srikandi`, bukan `bale/wara`. Tercatat di halaman status package itu.',
+                ],
+                [
+                    'label' => 'Route `notifikasi-naskah` belum ada',
+                    'status' => 'open',
+                    'note' => 'Rencana purpose-nya sudah disepakati, tapi `bale/srikandi` belum punya notifikasi '
+                        .'naskah sama sekali — tidak ada `Notification`, tidak ada `Wara::`. Route-nya baru '
+                        .'dibuat saat notifikasinya benar-benar diimplementasikan, karena device tujuan '
+                        .'belum ada artinya dan menebaknya berarti pesan keluar dari nomor yang salah.',
+                ],
+            ],
+        ],
+
+        [
+            'title' => 'Pekerjaan lintas package yang sedang jalan',
+            'items' => [
+                [
+                    'label' => 'Scraper `rak-srikandi` harus adaptasi payload naskah',
+                    'status' => 'open',
+                    'meta' => 'breaking change',
+                    'note' => 'Endpoint `POST /naskah-dinas` tidak lagi punya kolom organisasi di payload — '
+                        .'scraper harus mengirim `{ items }` saja, `RAKACA_ACCOUNT_ID` dihapus. '
+                        .'🔴 `account_id` yang masih dikirim TIDAK akan ditolak: field itu diabaikan diam-diam '
+                        .'karena tidak ada aturan validasi yang menyebut namanya. Jadi scraper bisa '
+                        .'mengira semuanya baik padahal Bale sudah tidak menyimpan scoping apa pun.',
+                ],
+                [
+                    'label' => 'Mesin OTP dipertahankan, bukan di-retire',
+                    'status' => 'done',
+                    'note' => 'Putusan 3 Okt 2026. `OtpService` dan endpoint `otp-request`/`otp-pending`/'
+                        .'`otp-verify` tetap ada karena `rak-srikandi` masih memakainya sebagai jalur '
+                        .'cadangan login. Menghapusnya akan memutus fallback tanpa menyentuh scraper.',
+                ],
+                [
+                    'label' => 'Client harus dipetakan manual setelah install',
+                    'status' => 'open',
+                    'note' => 'Client `Srikandi (Package)` dibuat dengan route KOSONG. Admin yang memetakan '
+                        .'`purpose` → device di `Wara > Client`. Install tidak bisa menebak device yang benar '
+                        .'— device yang ditebak berarti pesan keluar dari nomor yang tidak diminta siapa pun.',
                 ],
             ],
         ],
