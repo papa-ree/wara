@@ -1,13 +1,13 @@
 <?php
 
 use App\Models\User;
+use Bale\Core\Livewire\SharedComponents\ItemActions;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Index as ClientIndex;
 use Bale\Wara\Models\WaraClient;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Permission;
-use Spatie\Permission\Models\Role;
 
 uses(RefreshDatabase::class);
 
@@ -34,7 +34,7 @@ beforeEach(function () {
  * view-nya yang tidak cocok dengan dokumentasi.
  */
 it('🔴 mengunci prop yang benar-benar dimiliki ItemActions', function () {
-    $reflection = new ReflectionClass(Bale\Core\Livewire\SharedComponents\ItemActions::class);
+    $reflection = new ReflectionClass(ItemActions::class);
 
     $properties = collect($reflection->getProperties(ReflectionProperty::IS_PUBLIC))
         ->map(fn ($p) => $p->getName())
