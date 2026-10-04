@@ -3,6 +3,7 @@
 namespace Bale\Wara\Models;
 
 use Bale\Core\Traits\LogsActivity;
+use Bale\Wara\Support\DeviceRouter;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -39,13 +40,26 @@ class WaraClient extends Model
     /** Client internal bale, mis. notifikasi sistem. */
     public const TYPE_SERVICE = 'service';
 
-    /** Client per organisasi tanpa token sendiri. */
-    public const TYPE_TENANT = 'tenant';
-
+    /**
+     * 🔴 HANYA dua tipe, bukan `tenant`.
+     *
+     * Tipe `tenant` pernah ada dan sempat masuk ke dropdown form Client, tapi
+     * tidak pernah punya jalur resolusi: `SendClientResolver` hanya mencari
+     * lewat `api_token_id`, dan `defaultServiceClient()` hanya mencari
+     * `service`. Jadi client `tenant` yang lolos validasi form akan SELALU
+     * gagal saat mengirim - bukan karena tidak terpetakan, tapi karena tidak
+     * pernah ada cara menemukan client-nya dari request.
+     *
+     * "Organisasi penyewa" (`bale_id`) sudah menutup kebutuhan itu sebagai
+     * ATRIBUT, bukan sebagai tipe. Satu organisasi bisa punya client `token`
+     * dan `service` sekaligus; itu bukan alasan untuk tipe ketiga.
+     *
+     * @see DeviceRouter::clientForBaleId() untuk query
+     *      berdasarkan organisasi yang memang sengaja non-resolusi.
+     */
     public const TYPES = [
         self::TYPE_TOKEN,
         self::TYPE_SERVICE,
-        self::TYPE_TENANT,
     ];
 
     protected $table = 'wara_clients';

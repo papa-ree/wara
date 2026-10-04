@@ -9,6 +9,7 @@ use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\Models\WaraWebhookEndpoint;
+use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -576,5 +577,71 @@ describe('diagnosis kesiapan client', function () {
         Livewire::actingAs($this->user)
             ->test(ClientIndex::class)
             ->assertSee('perlu perhatian');
+    });
+});
+
+/*
+ * Tipe `tenant` pernah ada di `WaraClient::TYPES` dan karena itu muncul di
+ * dropdown form Client. Itu bug yang paling lama bertahan, karena tidak pernah
+ * gagal di layer mana pun: validasi `in:` menerimanya, kolom DB diam saja,
+ * dan halaman admin menampilkannya sebagai pilihan yang wajar.
+ *
+ * Client `tenant` baru ketahuan benar-benar rusak saat ada yang memakainya -
+ * karena TIDAK ADA jalur resolusi yang mencarinya. `SendClientResolver` hanya
+ * melihat `api_token_id`, `defaultServiceClient()` hanya melihat `service`.
+ *
+ * Test di bawah mengunci dua hal yang berbeda, supaya tidak hanya satu yang
+ * dijaga: model tidak menawarkan `tenant`, dan form yang dirender juga tidak.
+ */
+describe('tipe client tenant dibuang', function () {
+    it('🔴 model hanya menawarkan token dan service', function () {
+        expect(WaraClient::TYPES)->toBe([WaraClient::TYPE_TOKEN, WaraClient::TYPE_SERVICE])
+            ->and(WaraClient::TYPES)->not->toContain('tenant')
+            ->and(defined(WaraClient::class.'::TYPE_TENANT'))->toBeFalse();
+    });
+
+    it('🔴 form client tidak menampilkan opsi tenant', function () {
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->assertOk()
+            ->assertSee('<option value="token">token</option>', escape: false)
+            ->assertSee('<option value="service">service</option>', escape: false)
+            ->assertDontSee('<option value="tenant">', escape: false);
+    });
+
+    it('🔴 form menolak tipe tenant saat dikirim', function () {
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'ClientTenant')
+            ->set('type', 'tenant')
+            ->set('is_active', true)
+            ->call('save')
+            ->assertHasErrors('type');
+
+        // 🔴 Harus benar-benar tidak ada di DB - bukan hanya error validasi
+        // yang muncul di layar lalu tetap menyimpan baris.
+        expect(WaraClient::query()->where('name', 'ClientTenant')->exists())->toBeFalse();
+    });
+
+    it('🔴 client bertipe tenant yang sudah terlanjur ada akan gagal saat mengirim', function () {
+        // 🔴 Menutup jalur lain: kalau migrasi lama pernah berjalan di
+        // database yang sudah ada, baris `tenant` bisa sudah terlanjur ada
+        // dan router tidak boleh diam-diam memperlakukannya sebagai tipe sah.
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE, 'name' => 'Terlanjur ada', 'is_active' => true,
+        ]);
+
+        // Bypass fillable supaya kita bisa menyimulasikan baris lama.
+        $client->forceFill(['type' => 'tenant'])->save();
+
+        $resolved = app(DeviceRouter::class)->defaultServiceClient();
+
+        // 🔴 Yang diuji bukan "router mengembalikan null" - database test
+        // punya client `service` lain (dari migrasi). Yang diuji: baris
+        // `tenant` TIDAK PERNAH menjadi hasil resolusi, walau ia ada, aktif,
+        // dan muncul lebih dulu di `wara_clients`.
+        expect($client->fresh()->type)->toBe('tenant')
+            ->and(WaraClient::TYPES)->not->toContain('tenant')
+            ->and($resolved?->getKey())->not->toBe($client->getKey());
     });
 });

@@ -34,9 +34,16 @@ return new class extends Migration
             // sistem) yang tidak dimiliki satu bale tertentu.
             $table->uuid('bale_id')->nullable()->index();
 
-            // `token`     = client yang_identity-nya adalah sebuah api token.
-            // `service`   = client internal bale (mis. WaraChannel notifikasi).
-            // `tenant`    = client perorganisasi tanpa token sendiri.
+            // 🔴 Hanya dua nilai yang valid: `token` dan `service`.
+            //   `token`   = client yang identitasnya sebuah api token.
+            //   `service` = client internal bale (mis. WaraChannel notifikasi).
+            //
+            // Tipe `tenant` DIBUANG. Tidak ada jalur resolusi yang memakainya:
+            // `SendClientResolver` mencari lewat `api_token_id`, dan
+            // `defaultServiceClient()` hanya mencari `service`. Client bertipe
+            // `tenant` akan lolos constraint di level DB tapi SELALU gagal
+            // saat mengirim - kegagalan yang muncul jauh dari penyebabnya.
+            // Organisasi penyewa tetap punya kolomnya sendiri: `bale_id` di atas.
             $table->string('type', 32)->default('service');
 
             // Wajib kalau `type = 'token'`. Tidak dipasang sebagai foreign key
