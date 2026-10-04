@@ -171,8 +171,24 @@ class WaraManager
     /**
      * Batas percobaan per sesi login (PRD §8.2).
      *
-     * Dilewati kalau `$sessionKey` kosong — pemanggil yang tidak punya konsep
-     * sesi tidak bisa dihitung dengan fair.
+     * 🔴 PEMANGGIL TANPA `session_key` TIDAK PERNAH DI-BATAS — INI KEPUTUSAN
+     * SADAR, BUKAN KELALAIN (disepakati 4 Okt 2026).
+     *
+     * Baris `return` di bawah berarti Aturan §8.2 sama sekali tidak berlaku:
+     * tidak ada penghitung yang bertambah, jadi `attempt` juga null dan tidak
+     * ada baris log yang bisa dibaca untuk melihat polanya. Jalur ini tetap
+     * punya cooldown per nomor dan backoff per device, jadi tidak tanpa
+     * pengaman — hanya tanpa pengaman spesifik sesi.
+     *
+     * Konsekuensi yang harus disadari: client API yang dibuat dengan scope
+     * kirim baru bisa mengaktifkan jalur tanpa batas percobaan. Itu sebabnya
+     * setiap pemanggil eksternal WAJIB mengirim `session_key`. Yang dibolehkan
+     * tanpa `session_key` hanya jalur internal yang memang tidak punya konsep
+     * sesi, yaitu `WaraChannel`.
+     *
+     * Kalau nanti ini berubah jadi "wajib", jangan lupa mengecualikan
+     * `WaraChannel` secara eksplisit — kalau tidak, semua notifikasi internal
+     * ikut rusak.
      */
     protected function guardSessionAttempts(string $phone, ?string $sessionKey, WaraSession $session): void
     {

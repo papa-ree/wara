@@ -109,14 +109,23 @@ class WaraLog extends Model
     public const SESSION_LAST = 'last';
 
     /**
-     * Batas percobaan yang berlaku saat ini.
+     * Batas percobaan yang berlaku saat ini, atau `null` kalau tidak ada batas.
      *
-     * Dibaca dari config, bukan di-hardcode, supaya `WARA_MAX_ATTEMPTS_PER_SESSION`
-     * yang diubah di environment benar-benar tercermin di layar.
+     * 🔴 `null` BUKAN berarti "batas 1". Ini berarti `WARA_MAX_ATTEMPTS_PER_SESSION`
+     * disetel `<= 0`, dan itu diartikan sebagai **tidak ada batas** — persis
+     * seperti yang dilakukan `SendPacer::sessionAttemptsRemaining()` yang
+     * mengembalikan `PHP_INT_MAX` untuk nilai yang sama.
+     *
+     * Versi lama method ini memakai `max(1, ...)`, jadi `0` diartikan sebagai
+     * "batas 1". Dua tempat itu tidak bisa benar bersamaan: gateway menganggap
+     * tanpa batas, sementara badge log menampilkan "2/1". Klamp ini sekarang
+     * dihapus supaya hanya ada satu interpretasi.
      */
-    public function maxSessionAttempts(): int
+    public function maxSessionAttempts(): ?int
     {
-        return max(1, (int) config('wara.max_attempts_per_session', 3));
+        $max = (int) config('wara.max_attempts_per_session', 3);
+
+        return $max > 0 ? $max : null;
     }
 
     /**
@@ -129,6 +138,9 @@ class WaraLog extends Model
      * `$record->session_attempt_label` di tempat lain - dan yang salah akan
      * diam-diam merender kosong tanpa error.
      *
+     * Tanpa batas configured, penyebutnya dihilangkan: "4" bukan "4/∞" dan
+     * tentu bukan "4/1".
+     *
      * Null kalau baris ini bukan bagian dari percobaan sesi - baik karena tidak
      * ada `session_key`, atau karena `session_key` ada tapi `attempt` belum diisi
      * (baris lama sebelum kolomnya ditambah).
@@ -139,7 +151,11 @@ class WaraLog extends Model
             return null;
         }
 
-        return sprintf('%d/%d', $this->attempt, $this->maxSessionAttempts());
+        $max = $this->maxSessionAttempts();
+
+        return $max === null
+            ? sprintf('%d', $this->attempt)
+            : sprintf('%d/%d', $this->attempt, $max);
     }
 
     /**
@@ -150,6 +166,12 @@ class WaraLog extends Model
      * "habis" dipakai untuk kondisi setelah itu, yaitu ketika tidak ada lagi
      * percobaan yang tercatat karena semuanya ditolak sebelum sampai gateway —
      * jadi tidak akan pernah terlihat sebagai badge di baris log mana pun.
+     *
+     * 🔴 Guard `max === null` itu wajib, bukan cuma biar aman. Tanpa itu,
+     * `attempt >= PHP_INT_MAX` selalu false, jadi setiap sesi terbaca `active`
+     * selamanya tepat ketika batasnya sengaja dimatikan — dan badge amber di
+     * baris Log, serta banner sesi habis di halaman Device, sama-sama hilang
+     * tanpa penjelasan.
      */
     public function getSessionStateAttribute(): string
     {
@@ -157,9 +179,37 @@ class WaraLog extends Model
             return self::SESSION_NONE;
         }
 
-        return $this->attempt >= $this->maxSessionAttempts()
+        $max = $this->maxSessionAttempts();
+
+        if ($max === null) {
+            return self::SESSION_ACTIVE;
+        }
+
+        return $this->attempt >= $max
             ? self::SESSION_LAST
             : self::SESSION_ACTIVE;
+    }
+
+    /**
+     * Baris yang menyentuh batas percobaan sesi dalam `sinceMinutes` terakhir.
+     *
+     * 🔴 Kalau batas configured `<= 0` (tanpa batas), scope ini selalu kosong —
+     * dan itu benar, bukan bug. Tidak ada sesi yang "habis" kalau tidak ada
+     * batasnya. Guard-nya mencegah query sia-sia ke `wara_logs`.
+     */
+    public function scopeExhausted(Builder $query, int $sinceMinutes): Builder
+    {
+        $max = $this->maxSessionAttempts();
+
+        if ($max === null) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query
+            ->whereNotNull('session_key')
+            ->whereNotNull('attempt')
+            ->where('attempt', '>=', $max)
+            ->where('created_at', '>=', now()->subMinutes($sinceMinutes));
     }
 
     /**

@@ -101,7 +101,15 @@
     {{-- Percobaan sesi --}}
     <td class="px-4 py-3.5 hidden xl:table-cell">
         @if ($record->session_state === WaraLog::SESSION_NONE)
-            <span class="text-sm text-gray-400 dark:text-gray-500">{{ __('—') }}</span>
+            {{--
+                🔴 Tanda hubung tanpa penjelasan pernah dibaca sebagai
+                "kolom ini belum diisi" atau "tidak berlaku". Padahal `—` di
+                sini berarti CELAH: pemanggil tidak mengirim `session_key`, jadi
+                batas percobaan §8.2 tidak pernah dihitung untuk baris ini.
+                Putusan sadar 4 Okt 2026, bukan kelalaian.
+            --}}
+            <span class="text-sm text-gray-400 dark:text-gray-500 cursor-help"
+                title="{{ __('Tidak ada session_key: batas percobaan sesi §8.2 tidak dihitung untuk baris ini. Celah yang disengaja.') }}">{{ __('—') }}</span>
         @else
             <span @class([
                 'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium font-mono',

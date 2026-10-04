@@ -95,14 +95,36 @@ return [
     | `max_attempts_per_session`  - batas percobaan kirim per sesi login, agar
     |                              pola "captcha salah → kirim ulang" tidak
     |                              berubah jadi burst.
+    |                              🔴 NILAI `<= 0` BERARTI TIDAK ADA BATAS,
+    |                              bukan "tidak boleh kirim". Ini disepakati 4 Okt
+    |                              2026 dan harus konsisten dengan
+    |                              `SendPacer::sessionAttemptsRemaining()` yang
+    |                              mengembalikan `PHP_INT_MAX` untuk nilai yang
+    |                              sama. Kalau diartikan lain di satu tempat,
+    |                              admin bisa mengira pacing dimatikan padahal
+    |                              sedang aktif, atau sebaliknya.
+    | `session_window_seconds`    - berapa lama batas di atas berlaku. Sesi yang
+    |                              habis otomatis boleh mencoba lagi setelah
+    |                              jendela ini lewat (auto-unblock).
+    | `exhausted_alert_after_minutes` - berapa lama sesi yang baru saja menyentuh
+    |                              batas ditampilkan sebagai peringatan di
+    |                              dashboard Device.
     | `device_backoff_seconds`    - jeda sebelum mencoba ulang device yang
     |                              sedang tidak siap.
+    |
+    | 🔴 `exhausted_alert_after_minutes` bukan versi lain dari
+    | `session_window_seconds`, dan tidak boleh disamakan. Yang satu governs
+    | "saya tidak boleh mencoba lagi" (900 detik = 15 menit, konsekuensi keras),
+    | yang lain governs "tolong lihat ini" (default 15 menit, hanya informasi).
+    | Kalau keduanya disamakan, peringatan akan hilang tepat di detik yang sama
+    | dengan berakhirnya jendela, yaitu saat admin paling perlu tahu.
     |
     */
 
     'cooldown_seconds' => (int) env('WARA_COOLDOWN_SECONDS', 60),
     'max_attempts_per_session' => (int) env('WARA_MAX_ATTEMPTS_PER_SESSION', 3),
     'session_window_seconds' => (int) env('WARA_SESSION_WINDOW_SECONDS', 900),
+    'exhausted_alert_after_minutes' => (int) env('WARA_EXHAUSTED_ALERT_AFTER', 15),
     'device_backoff_seconds' => (int) env('WARA_DEVICE_BACKOFF_SECONDS', 300),
 
     /*
@@ -121,6 +143,36 @@ return [
         'local_prefix_to_international' => '0',
         'international_prefix' => '62',
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Kolom yang SENGAJA tidak dienkripsi
+    |--------------------------------------------------------------------------
+    |
+    | 🔴 PUTUSAN PRODUK (4 Okt 2026): `wara_logs.chat_id` dan
+    | `wara_sessions.jid` dibiarkan plaintext. Alasannya dibuktikan dari kode,
+    | bukan "mungkin nanti":
+    |
+    | 1. `chat_id` TIDAK dipakai sebagai filter atau pencarian query di
+    |    `bale/wara`. Satu-satunya pemakaiannya adalah ditulis
+    |    (`WebhookController`) dan dibaca untuk render. Klaim lama bahwa
+    |    enkripsi menghalangi filter terbukti salah -- `OtpPendingController`
+    |    di `bale/srikandi` justru menulis "Pencarian memakai `device_id`,
+    |    BUKAN `chat_id` dan BUKAN `phone`".
+    |
+    | 2. `jid` dibaca `WaraSession::isSendable()` pada setiap request kirim, jadi
+    |    harus tersedia tanpa decrypt per panggilan. Enkripsi di sini menambah
+    |    latensi dan risiko gagal decrypt tanpa memberi manfaat apa pun,
+    |    karena nilainya sudah ditampilkan di halaman Device.
+    |
+    | Yang tetap terenkripsi: `wara_logs.phone`, `wara_logs.body`, dan
+    | `wara_webhook_endpoints.secret`. Ketiganya tidak perlu dibaca per request.
+    |
+    | Kalau nanti ada kebutuhan mencari log per nomor, jawabannya bukan encrypt
+    | `chat_id`/`jid` — tapi blind index HMAC, supaya bisa dicari tanpa bisa
+    | dibaca. Lihat docs/wara/TODO.md P2.
+    |
+    */
 
     /*
     |--------------------------------------------------------------------------

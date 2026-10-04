@@ -26,6 +26,43 @@
         </x-slot>
     </x-core::page-header>
 
+    {{-- Peringatan §8.2: sesi login yang habis percobaannya.
+         DISISIPKAN DI ATAS peringatan device karena urutan risikonya berbeda.
+         "captcha salah → kirim ulang → mungkin lockout" lebih merusak daripada
+         device offline: yang offline cuma tidak bisa kirim, yang exhausted bisa
+         membuat nomor diblokir permanen. --}}
+    @if ($this->recentlyExhaustedSessions->isNotEmpty())
+        <div class="mt-6 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-4">
+            <div class="flex items-start gap-3">
+                <x-lucide-alert-triangle class="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div class="min-w-0">
+                    <h4 class="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                        {{ __('Sesi login habis percobaan') }}
+                    </h4>
+                    <ul class="mt-2 text-sm text-amber-800 dark:text-amber-300 space-y-1">
+                        @foreach ($this->recentlyExhaustedSessions as $log)
+                            <li>
+                                <span class="font-mono">{{ $log->session_key }}</span>
+                                — {{ __('percobaan terakhir yang diizinkan: :label', ['label' => $log->session_attempt_label]) }}
+                                @if ($log->device_id)
+                                    <span class="text-xs">
+                                        ({{ __('device :device', ['device' => $log->device_id]) }})
+                                    </span>
+                                @endif
+                            </li>
+                        @endforeach
+                    </ul>
+                    <p class="mt-3 text-xs text-amber-700 dark:text-amber-400">
+                        {{ __('Percobaan berikutnya untuk sesi ini ditolak sampai jendela :minutes menit lewat. Sesi baru tetap berjalan normal.', ['minutes' => $this->session_window_minutes]) }}
+                    </p>
+                    <p class="mt-1 text-xs text-amber-700/80 dark:text-amber-400/80">
+                        {{ __('Pola captcha salah berulang adalah pemicu lockout yang paling sering terjadi. Kalau ini sering muncul, siapkan nomor uji yang terpisah dari nomor produksi.') }}
+                    </p>
+                </div>
+            </div>
+        </div>
+    @endif
+
     {{-- Peringatan §8.3: device yang tidak siap dalam waktu lama --}}
     @if ($this->needsReattention->isNotEmpty())
         <div class="mt-6 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-4">

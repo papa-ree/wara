@@ -330,15 +330,65 @@ describe('sesi percobaan di halaman log', function () {
             ->toBe(WaraLog::SESSION_LAST);
     });
 
-    it('🔴 batas nol atau negatif tidak membuat semua baris jadi last', function () {
-        // `WARA_MAX_ATTEMPTS_PER_SESSION=0` berarti gateway tidak boleh mengirim
-        // sama sekali. Tanpa clamp, `attempt >= 0` membuat SETIAP baris — termasuk
-        // yang `attempt`-nya null — terbaca sebagai percobaan terakhir.
+    it('🔴 batas nol berarti TIDAK ADA BATAS, bukan batas satu', function () {
+        // 🔴 PUTUSAN PRODUK (4 Okt 2026): `WARA_MAX_ATTEMPTS_PER_SESSION <= 0`
+        // berarti tanpa batas, mengikuti `SendPacer::sessionAttemptsRemaining()`
+        // yang mengembalikan `PHP_INT_MAX` untuk nilai yang sama.
+        //
+        // Versi test ini sebelumnya mengunci `max(1, ...)` — jadi `0` diartikan
+        // sebagai "batas 1". Itu bertentangan dengan gateway, dan dua tempat
+        // tidak bisa benar bersamaan.
         config()->set('wara.max_attempts_per_session', 0);
 
-        expect(makeLog(['session_key' => 'sesi-d'])->maxSessionAttempts())->toBe(1)
+        expect(makeLog(['session_key' => 'sesi-d'])->maxSessionAttempts())->toBeNull()
             ->and(makeLog(['session_key' => 'sesi-d', 'attempt' => null])->session_state)
             ->toBe(WaraLog::SESSION_NONE);
+    });
+
+    it('🔴 tanpa batas, attempt tinggi tetap active dan labelnya tanpa penyebut', function () {
+        // 🔴 Dua konsekuensi yang harus benar bersamaan:
+        //
+        // 1. Label: "4" bukan "4/1". Angka "4/1" terlihat seperti bug.
+        // 2. State: TIDAK `last`. `attempt >= PHP_INT_MAX` selalu false, jadi
+        //    tanpa guard eksplisit setiap sesi terbaca `active` selamanya --
+        //    persis ketika batasnya sengaja dimatikan, dan badge amber plus
+        //    banner sesi habis di Device sama-sama hilang tanpa penjelasan.
+        config()->set('wara.max_attempts_per_session', 0);
+
+        $log = makeLog(['session_key' => 'sesi-bebas', 'attempt' => 4]);
+
+        expect($log->session_attempt_label)->toBe('4')
+            ->and($log->session_state)->toBe(WaraLog::SESSION_ACTIVE)
+            ->and($log->session_attempt_label)->not->toContain('/');
+    });
+
+    it('🔴 scopeExhausted selalu kosong saat batasnya dimatikan', function () {
+        // Kalau scope ini tidak dijaga, banner di halaman Device akan
+        // menampilkan sesi "habis" padahal tidak ada batas sama sekali.
+        config()->set('wara.max_attempts_per_session', 0);
+
+        makeLog(['session_key' => 'sesi-bebas-2', 'attempt' => 9]);
+        makeLog(['session_key' => 'sesi-bebas-3', 'attempt' => 3]);
+
+        expect(WaraLog::query()->exhausted(15)->count())->toBe(0);
+    });
+
+    it('🔴 baris tanpa sesi menjelaskan celahnya lewat tooltip', function () {
+        // 🔴 Tanda hubung `—` pernah dibaca sebagai "kolom belum diisi" atau
+        // "tidak berlaku". Padahal itu berarti batas percobaan §8.2 TIDAK PERNAH
+        // dihitung untuk baris ini — celah yang disengaja (putusan 4 Okt 2026).
+        //
+        // Test ini mengunci tooltip-nya di FILE BLADE, bukan cuma hasil render,
+        // supaya bear + title yang kosong tidak lolos sebagai "lulus".
+        makeLog(['session_key' => null, 'attempt' => null, 'body' => 'baris tanpa sesi']);
+
+        $view = file_get_contents(dirname(__DIR__, 2)
+            .'/resources/views/livewire/pages/landlord/log/section/log-row.blade.php');
+
+        expect($view)->toContain(__('Tidak ada session_key: batas percobaan sesi §8.2 tidak dihitung untuk baris ini. Celah yang disengaja.'))
+            ->and($view)->toContain('cursor-help')
+            // Tanda hubung tetap ada - yang ditambahkan penjelasannya.
+            ->and($view)->toContain('—');
     });
 
     it('🔴 kolom Percobaan muncul di header tabel', function () {

@@ -153,9 +153,15 @@ return [
                 [
                     'label' => 'Batas percobaan jadi stop condition, bukan cooldown',
                     'status' => 'blocked',
-                    'meta' => 'wajib',
-                    'note' => '`max_attempts_per_session` harus menghentikan siklus sepenuhnya dan menunggu '
-                        .'campuran tangan manusia, bukan "coba lagi nanti".',
+                    'meta' => 'deviation TOPIK §8.1',
+                    'note' => '🔴 Sudah stop condition (`guardSessionAttempts()` melempar '
+                        .'`TooManyAttemptsException`), dan sekarang ada peringatan banner di halaman Device. '
+                        .'TAPI auto-unblock: setelah jendela `session_window_seconds` (900 detik) percobaan '
+                        .'berikutnya tetap jalan sendiri. TOPIK §8.1 meminta "menunggu campur tangan manusia"; '
+                        .'yang disepakati 4 Okt 2026 adalah auto-unblock + peringatan. Konsekuensinya: admin '
+                        .'yang belum bereaksi dalam 15 menit akan mendapat pesan masuk dari nomor yang sama. '
+                        .'Kalau ini tidak diterima, yang perlu dibangun reset manual oleh admin — bukan '
+                        .'menaikkan angka jendela. Rinciannya di `docs/wara/TODO.md` P2.',
                 ],
                 [
                     'label' => 'Peringatan status device buruk di dashboard',
@@ -186,13 +192,14 @@ return [
             'items' => [
                 [
                     'label' => 'Enkripsi `chat_id` dan `wara_sessions.jid`',
-                    'status' => 'open',
-                    'note' => '🔴 Hambatan yang dulu tercatat sudah gugur. Yang tertulis sebelumnya menyebut '
-                        .'"polling `bale/srikandi` bergantung pada `chat_id`" — faktanya `OtpPendingController` '
-                        .'mencari lewat `device_id` dan secara eksplisit bukan `chat_id`. `chat_id` juga tidak '
-                        .'dipakai sebagai filter query di package ini. Sisa masalahnya murni pilihan: '
-                        .'blind index yang bisa dicari-tapi-tidak-baca, atau biarkan plaintext dengan alasan '
-                        .'yang dicatat. Rinciannya di `docs/wara/TODO.md` P2.',
+                    'status' => 'done',
+                    'meta' => 'keputusan 4 Okt',
+                    'note' => 'Putusan: dibiarkan plaintext, alasannya ditulis di blok "Kolom yang SENGAJA '
+                        .'tidak dienkripsi" pada `config/wara.php`. Alasannya dibuktikan dari kode, bukan '
+                        .'"mungkin nanti": `chat_id` tidak dipakai sebagai filter query (`OtpPendingController` '
+                        .'mencari lewat `device_id` dan eksplisit bukan `chat_id`), dan `jid` dibaca '
+                        .'`isSendable()` tiap request sehingga harus tersedia tanpa decrypt. '
+                        .'`phone`, `body`, dan `secret` tetap terenkripsi.',
                 ],
                 [
                     'label' => 'Endpoint `verified` → `consumed`',
@@ -232,6 +239,17 @@ return [
                         .'🔴 Catatan: itu semua milik `bale/srikandi` (`packages/srikandi/routes/api.php`), '
                         .'bukan `bale/wara`. Dicatat di halaman ini karena keputusannya menyangkut gateway, '
                         .'bukan karena ada kodenya di package ini.',
+                ],
+                [
+                    'label' => 'Pemanggil tanpa `session_key` tidak punya batas percobaan',
+                    'status' => 'open',
+                    'meta' => 'keputusan 4 Okt',
+                    'note' => 'Celah yang DISENGAJA (putusan 4 Okt 2026), bukan kelalaian. `guardSessionAttempts()` '
+                        .'kembali lebih dulu kalau `sessionKey` null, jadi aturan §8.2 tidak berlaku untuk '
+                        .'pemanggil itu — cooldown per nomor dan backoff per device tetap jalan. Jalur '
+                        .'internal `WaraChannel` memang tidak punya konsep sesi; yang perlu diwaspadai adalah '
+                        .'client API baru dengan scope kirim. Kolom Percobaan di halaman Log menandai baris '
+                        .'seperti ini sebagai celah, bukan sekadar kolom kosong.',
                 ],
                 [
                     'label' => 'Client harus dipetakan manual setelah install',
