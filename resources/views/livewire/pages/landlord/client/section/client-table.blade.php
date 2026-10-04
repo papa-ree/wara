@@ -5,8 +5,23 @@
         :columns="[
             ['key' => 'name', 'label' => __('Client'), 'sortable' => true],
             ['key' => 'type', 'label' => __('Tipe'), 'sortable' => true, 'hidden' => 'md'],
-            ['key' => 'routes', 'label' => __('Peta Purpose ke Device')],
-            ['key' => 'readiness', 'label' => __('Kesiapan'), 'hidden' => 'lg'],
+            [
+                // 🔴 Bukan kolom database - `wara_clients` tidak punya kolom
+                // `routes` atau `readiness`. Keduanya dihitung dari relasi dan
+                // dari `blockingReadinessIssues()`. Sorting kliknya sengaja
+                // dimatikan: tidak ada kolom nyata untuk diurutkan, dan
+                // `orderBy('routes')` akan jadi error SQL yang jauh lebih
+                // sulit dibaca daripada eager loading yang gagal.
+                'key' => 'routes',
+                'label' => __('Peta Purpose ke Device'),
+                'sortable' => false,
+            ],
+            [
+                'key' => 'readiness',
+                'label' => __('Kesiapan'),
+                'hidden' => 'lg',
+                'sortable' => false,
+            ],
             ['key' => 'created_at', 'label' => __('Dibuat'), 'sortable' => true, 'hidden' => 'xl'],
         ]"
         :searchable="['name', 'type']"

@@ -1,8 +1,18 @@
 <div>
     <x-core::page-header
         :title="__('Device WhatsApp')"
-        :subtitle="__('Katalog device gateway dan penugasan pengirim per tujuan.')">
+        :subtitle="__('Katalog device gateway, dan client mana saja yang memakainya.')">
         <x-slot name="actions">
+            {{-- 🔴 Penugasan tidak diubah dari halaman ini. Device hanya
+                 menampilkan device yang dipakai client mana pun; memetakan
+                 device ke purpose dilakukan di `Wara > Client`. Tanpa catatan
+                 ini, admin akan mencari form penugasan yang sudah tidak ada. --}}
+            <a href="{{ route('wara.client.index') }}"
+                class="inline-flex items-center gap-x-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">
+                <x-lucide-users class="w-4 h-4" />
+                {{ __('Kelola Client') }}
+            </a>
+
             <x-core::button
                 type="button"
                 label="{{ __('Sinkronkan Sekarang') }}"

@@ -28,14 +28,40 @@
         </div>
     </td>
 
-    {{-- Purpose --}}
+    {{-- 🔴 Ganti dari `$record->purpose` ke route milik device.
+         Kolom `wara_sessions.purpose` sudah dihapus, jadi baris lama
+         memanggil properti yang tidak ada dan mengosongkan kolom ini.
+         Penugasan(device, purpose) milik CLIENT, jadi yang tampil di sini
+         daftar client apa saja yang memakai device ini - jawaban yang
+         sebenarnya dicari admin saat membuka halaman Device.
+    --}}
     <td class="px-4 py-3.5 hidden lg:table-cell">
-        @if ($record->purpose)
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium font-mono bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-800/40">
-                {{ $record->purpose }}
+        @php
+            $deviceRoutes = $record->routes()->with('client:id,name')->get();
+        @endphp
+
+        @if ($deviceRoutes->isEmpty())
+            <span class="text-sm text-gray-400 dark:text-gray-500">
+                {{ __('Belum dipakai client mana pun') }}
             </span>
         @else
-            <span class="text-sm text-gray-400 dark:text-gray-500">{{ __('Belum ditugaskan') }}</span>
+            <div class="flex flex-wrap gap-1.5">
+                @foreach ($deviceRoutes as $route)
+                    <span wire:key="device-route-chip-{{ $route->getKey() }}"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border
+                            {{ $route->outbound_enabled
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-100 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/40'
+                                : 'bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/40' }}">
+                        <span class="font-mono">{{ $route->purpose }}</span>
+                        <span class="text-indigo-300 dark:text-indigo-500" aria-hidden="true">&rarr;</span>
+                        <span>{{ $route->client?->name ?? __('(client terhapus)') }}</span>
+                        @unless ($route->outbound_enabled)
+                            <span class="sr-only">{{ __('kirim mati') }}</span>
+                            <span aria-hidden="true">&times;</span>
+                        @endunless
+                    </span>
+                @endforeach
+            </div>
         @endif
     </td>
 

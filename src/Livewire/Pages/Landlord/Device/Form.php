@@ -44,7 +44,12 @@ class Form extends Component
      * Route yang memakai device ini, supaya admin tahu device itu melayani
      * client apa saja.
      *
-     * @return array<int, array{purpose: string, client: string}>
+     * 🔴 `outbound` ikut dibawa karena row view menandainya. Tanpa itu,
+     * device yang dipetakan ke client tapi sudah dimatikan akan terlihat
+     * sama persis dengan yang bisa mengirim - dan itu informasi yang
+     * menentukan apakah orang salah mendiagnosis kegagalan.
+     *
+     * @return array<int, array{purpose: string, client: string, outbound: bool}>
      */
     public function getRoutesProperty(): array
     {
@@ -54,7 +59,8 @@ class Form extends Component
             ->get()
             ->map(fn ($route): array => [
                 'purpose' => (string) $route->purpose,
-                'client' => (string) ($route->client?->name ?? '(client terhapus)'),
+                'client' => (string) ($route->client?->name ?? __('(client terhapus)')),
+                'outbound' => (bool) $route->outbound_enabled,
             ])
             ->all();
     }
@@ -127,6 +133,15 @@ class Form extends Component
 
     public function render()
     {
-        return view('wara::livewire.pages.landlord.device.form');
+        // 🔴 `routes` diteruskan EKSPLISIT, bukan mengandalkan computed
+        // property Livewire.
+        //
+        // Computed property hanya tersedia sebagai `$this->routes`. View yang
+        // menulis `$routes` berakhir dengan `Undefined variable $routes` -
+        // dan error itu baru muncul saat halaman dirender, bukan saat test
+        // lain yang memakai komponen ini lewat `mount()` saja.
+        return view('wara::livewire.pages.landlord.device.form', [
+            'routes' => $this->routes,
+        ]);
     }
 }

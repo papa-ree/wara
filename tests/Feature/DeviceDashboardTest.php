@@ -141,6 +141,72 @@ describe('route per client', function () {
         expect(Schema::hasColumn('wara_sessions', 'purpose'))->toBeFalse();
     });
 
+    it('🔴 halaman detail device TIDAK lagi punya input purpose atau tombol simpan', function () {
+        // 🔴 Regresi untuk view yang tertinggal dari sebelum refactor.
+        //
+        // `Device\Form` sudah tidak punya property `purpose` maupun method
+        // `save()` - penugasan pindah ke halaman Client. Tapi view-nya masih
+        // menaruh `<input wire:model="purpose">` dan tombol "Simpan
+        // Penugasan". Dua-duanya rusak: inputnya menulis ke property yang
+        // tidak ada, dan=`save()` memanggil method yang tidak ada.
+        //
+        // Yang lebih buruk dari error: form itu MELEBIHKAN. Admin akan
+        // mengira menugaskan device dari halaman ini, padahal yang tersimpan
+        // adalah route milik client lain.
+        $session = makeSessionDeviceDashboardTest();
+        $client = makeClientDeviceDashboardTest(['name' => 'Client Untuk Device']);
+
+        (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'otp',
+            'device_id' => $session->device_id,
+        ])->save();
+
+        $html = Livewire::actingAs($this->user)
+            ->test(DeviceForm::class, ['session' => $session])
+            ->assertOk()
+            ->html();
+
+        expect($html)->not->toContain('wire:model="purpose"')
+            ->and($html)->not->toContain('wire:submit="save"')
+            ->and($html)->not->toContain('Simpan Penugasan')
+            // Ganti dengan daftar client yang memakai device ini.
+            ->and($html)->toContain('Client Untuk Device');
+    });
+
+    it('🔴 daftar device menampilkan client pemakai, bukan kolom purpose yang sudah hilang', function () {
+        // 🔴 Row view lama membaca `$record->purpose`. Properti itu sudah
+        // tidak ada, jadi kolomnya kosong tanpa error - jenis kegagalan yang
+        // paling mudah terlewat karena tidak ada yang meledak.
+        $session = makeSessionDeviceDashboardTest();
+        $client = makeClientDeviceDashboardTest(['name' => 'Client List']);
+
+        $route = (new WaraRoute)->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'notifikasi',
+            'device_id' => $session->device_id,
+        ]);
+
+        $route->fill(['outbound_enabled' => false])->save();
+
+        $html = Livewire::actingAs($this->user)
+            ->test('core-shared-components::data-table', [
+                'model' => WaraSession::class,
+                'rowView' => 'wara::livewire.pages.landlord.device.section.device-row',
+                'with' => ['routes'],
+                'columns' => [],
+                'constraints' => ['device_id' => $session->device_id],
+            ])
+            ->assertOk()
+            ->html();
+
+        expect($html)->toContain('Client List')
+            ->and($html)->toContain('notifikasi')
+            // Route yang outbound-nya mati harus ditandai, kalau tidak admin
+            // akan mengira device ini siap untuk semua client.
+            ->and($html)->toContain('kirim mati');
+    });
+
     it('client_id tidak bisa ditulis lewat mass assignment pada route', function () {
         $client = makeClientDeviceDashboardTest();
 
