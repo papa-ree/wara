@@ -13,7 +13,11 @@
 |
 | 🔴 Status di file ini bisa basi kalau dokumennya sudah diperbarui tapi file
 | ini belum. Karena itu halaman menampilkan `updated_at` supaya staleness-nya
-| terlihat, bukan Challenger jadi tebakan.
+| terlihat, bukan harus ditebak.
+|
+| Yang tersisa sebagai daftar kerja ada di `docs/wara/TODO.md` (P0-P3). Kalau
+| item di bawah terlihat tidak cocok dengan kodenya, perbarui kedua file itu
+| bersama-sama -- jangan hanya satu.
 |
 | Referensi: status fase dari PLAN.md, item produksi dari TOPIK.md §8.
 |
@@ -31,7 +35,8 @@ return [
     'title' => 'Status bale/wara',
 
     'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13; '
-        .'sisa yang tercatat adalah persiapan produksi, bukan fitur yang belum dibangun.',
+        .'sisa yang tercatat adalah persiapan produksi dan keputusan yang masih terbuka, bukan fitur '
+        .'yang belum dibangun. Daftar kerjanya di `docs/wara/TODO.md`.',
 
     'updated_at' => '2026-10-04',
 
@@ -154,9 +159,12 @@ return [
                 ],
                 [
                     'label' => 'Peringatan status device buruk di dashboard',
-                    'status' => 'open',
-                    'note' => '`wara:poll-status` sudah ada; status `disconnected`/`connecting` yang bertahan '
-                        .'wajib muncul sebagai peringatan, bukan retry diam-diam.',
+                    'status' => 'done',
+                    'meta' => 'PRD §8.3',
+                    'note' => '🔴 Status ini sempat `open` padahal sudah ada, jadi dicatat di '
+                        .'`docs/wara/TODO.md` P0 sebagai koreksi. Amber "Device perlu dipasang ulang" + abu '
+                        .'"Device sedang tidak siap" sudah dirender di header Device, ambangnya '
+                        .'`offline_alert_after_minutes`, dan `wara:poll-status` exit non-nol saat perlu perhatian.',
                 ],
                 [
                     'label' => 'Pisahkan akun uji dari akun produksi',
@@ -179,9 +187,12 @@ return [
                 [
                     'label' => 'Enkripsi `chat_id` dan `wara_sessions.jid`',
                     'status' => 'open',
-                    'note' => 'Keduanya masih plaintext; `phone` dan `body` sudah terenkripsi. '
-                        .'Kendala: `chat_id` tidak bisa dipakai filter kalau dienkripsi, dan polling '
-                        .'`bale/srikandi` bergantung padanya.',
+                    'note' => '🔴 Hambatan yang dulu tercatat sudah gugur. Yang tertulis sebelumnya menyebut '
+                        .'"polling `bale/srikandi` bergantung pada `chat_id`" — faktanya `OtpPendingController` '
+                        .'mencari lewat `device_id` dan secara eksplisit bukan `chat_id`. `chat_id` juga tidak '
+                        .'dipakai sebagai filter query di package ini. Sisa masalahnya murni pilihan: '
+                        .'blind index yang bisa dicari-tapi-tidak-baca, atau biarkan plaintext dengan alasan '
+                        .'yang dicatat. Rinciannya di `docs/wara/TODO.md` P2.',
                 ],
                 [
                     'label' => 'Endpoint `verified` → `consumed`',
@@ -216,15 +227,27 @@ return [
                     'label' => 'Mesin OTP dipertahankan, bukan di-retire',
                     'status' => 'done',
                     'note' => 'Putusan 3 Okt 2026. `OtpService` dan endpoint `otp-request`/`otp-pending`/'
-                        .'`otp-verify` tetap ada karena `rak-srikandi` masih memakainya sebagai jalur '
-                        .'cadangan login. Menghapusnya akan memutus fallback tanpa menyentuh scraper.',
+                        .'`otp-verify` TETAP ADA karena `rak-srikandi` masih memakainya sebagai jalur '
+                        .'cadangan login. Menghapusnya akan memutus fallback tanpa menyentuh scraper. '
+                        .'🔴 Catatan: itu semua milik `bale/srikandi` (`packages/srikandi/routes/api.php`), '
+                        .'bukan `bale/wara`. Dicatat di halaman ini karena keputusannya menyangkut gateway, '
+                        .'bukan karena ada kodenya di package ini.',
                 ],
                 [
                     'label' => 'Client harus dipetakan manual setelah install',
                     'status' => 'open',
-                    'note' => 'Client `Srikandi (Package)` dibuat dengan route KOSONG. Admin yang memetakan '
-                        .'`purpose` → device di `Wara > Client`. Install tidak bisa menebak device yang benar '
-                        .'— device yang ditebak berarti pesan keluar dari nomor yang tidak diminta siapa pun.',
+                    'note' => 'Client `Srikandi (Package)` dibuat oleh `srikandi:install` dengan route KOSONG. '
+                        .'Admin yang memetakan `purpose` → device di `Wara > Client`. Install tidak bisa '
+                        .'menebak device yang benar — device yang ditebak berarti pesan keluar dari nomor '
+                        .'yang tidak diminta siapa pun.',
+                ],
+                [
+                    'label' => '`wara:install` tidak membuat client maupun route',
+                    'status' => 'open',
+                    'note' => '🔴 `wara:install` hanya men-seed 7 permission — nol baris `WaraClient`, nol route. '
+                        .'Konsekuensinya harus terlihat: instalasi Wara tanpa `bale/srikandi` '
+                        .'berarti nol client, nol route, dan gateway tidak bisa dipakai. Daftar client harus '
+                        .'dibuat manual lewat `Wara > Client` saat belum ada package lain yang memilikinya.',
                 ],
             ],
         ],

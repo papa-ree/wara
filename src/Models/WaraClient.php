@@ -164,8 +164,9 @@ class WaraClient extends Model
      * Bedanya dengan `readinessConditions()` itu penting: kondisi di sana
      * menjelaskan konfigurasi, sedangkan daftar ini hanya berisi hal yang
      * benar-benar menggagalkan request. Menampilkan "tidak punya route" di
-     * daftar ini akan_push admin ke memperbaiki sesuatu yang memang belum
-     *Modules problem - hanya belum dikonfigurasi.
+     * daftar ini akan mendorong admin memperbaiki sesuatu yang sebenarnya belum
+     * salah -- "belum dipetakan" adalah kondisi normal yang disengaja, bukan
+     * masalah yang perlu diperbaiki.
      *
      * @return list<array{key: string, message: string}>
      */
