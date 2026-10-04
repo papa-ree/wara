@@ -82,6 +82,86 @@ class WaraLog extends Model
         return $query->where('session_key', $sessionKey);
     }
 
+    /*
+     * -------------------------------------------------------------------------
+     * Sesi percobaan (P1 docs/wara/TODO.md)
+     * -------------------------------------------------------------------------
+     *
+     * `session_key` + `attempt` sudah tersimpan sejak PRD §8.2, tapi tidak pernah
+     * sampai ke layar: `log-table.blade.php` tidak mencarinya dan `log-row.blade.php`
+     * tidak merendernya. Akibatnya admin yang sedang menelusuri "kenapa OTP tidak
+     * sampai" tidak punya cara melihat bahwa satu sesi login sudah menghabiskan
+     * seluruh jatah percobaannya.
+     *
+     * Helper di bawah sengaja ada di model, bukan di view: "sesi ini sudah habis"
+     * adalah keputusan yang melibatkan angka dari config. Kalau dihitung ulang di
+     * Blade, tiap tampilan harus mengingat aturan yang sama, dan perubahan config
+     * bisa membuat satu layar bilang "habis" sementara yang lain tidak.
+     */
+
+    /** Baris log yang tidak punya konsep sesi percobaan (pesan biasa). */
+    public const SESSION_NONE = 'none';
+
+    /** Baris log yang masih punya jatah percobaan. */
+    public const SESSION_ACTIVE = 'active';
+
+    /** Baris log pada percobaan terakhir yang diizinkan. */
+    public const SESSION_LAST = 'last';
+
+    /**
+     * Batas percobaan yang berlaku saat ini.
+     *
+     * Dibaca dari config, bukan di-hardcode, supaya `WARA_MAX_ATTEMPTS_PER_SESSION`
+     * yang diubah di environment benar-benar tercermin di layar.
+     */
+    public function maxSessionAttempts(): int
+    {
+        return max(1, (int) config('wara.max_attempts_per_session', 3));
+    }
+
+    /**
+     * Percobaan ke-berapa dari batas sesi, mis. "2/3".
+     *
+     * 🔴 Dibuat sebagai accessor (`session_attempt_label`), bukan method biasa,
+     * supaya konsisten dengan `masked_body` dan `status_label` yang sudah dipakai
+     * di baris tabel. Kalau bentuknya berbeda, view akan menulis
+     * `$record->sessionAttemptLabel()` di satu tempat dan
+     * `$record->session_attempt_label` di tempat lain - dan yang salah akan
+     * diam-diam merender kosong tanpa error.
+     *
+     * Null kalau baris ini bukan bagian dari percobaan sesi - baik karena tidak
+     * ada `session_key`, atau karena `session_key` ada tapi `attempt` belum diisi
+     * (baris lama sebelum kolomnya ditambah).
+     */
+    public function getSessionAttemptLabelAttribute(): ?string
+    {
+        if ($this->attempt === null) {
+            return null;
+        }
+
+        return sprintf('%d/%d', $this->attempt, $this->maxSessionAttempts());
+    }
+
+    /**
+     * Kondisi baris ini terhadap batas percobaan sesi.
+     *
+     * 🔴 `last` berarti "ini percobaan terakhir yang BOLEH dikirim". Percobaan
+     * berikutnya sudah ditolak `WaraManager::guardSessionAttempts()`. Istilah
+     * "habis" dipakai untuk kondisi setelah itu, yaitu ketika tidak ada lagi
+     * percobaan yang tercatat karena semuanya ditolak sebelum sampai gateway —
+     * jadi tidak akan pernah terlihat sebagai badge di baris log mana pun.
+     */
+    public function getSessionStateAttribute(): string
+    {
+        if ($this->session_key === null || $this->attempt === null) {
+            return self::SESSION_NONE;
+        }
+
+        return $this->attempt >= $this->maxSessionAttempts()
+            ? self::SESSION_LAST
+            : self::SESSION_ACTIVE;
+    }
+
     /**
      * Body pesan dengan kode OTP disamarkan.
      *

@@ -277,3 +277,170 @@ describe('permission halaman log', function () {
         Livewire::test(LogIndex::class)->assertOk();
     });
 });
+
+/*
+ * P1 docs/wara/TODO.md: `session_key` + `attempt` sudah tersimpan sejak PRD §8.2,
+ * tapi tidak pernah sampai ke layar. Test di sini mengunci pemunculannya,
+ * bukan hanya keberadaan datanya — `SendPacingTest` sudah membuktikan kolomnya
+ * terisi, jadi mengulang itu di sini hanya menguji ulang hal yang sama.
+ */
+describe('sesi percobaan di halaman log', function () {
+    it('🔴 attempt memakai batas dari config, bukan angka hardcode', function () {
+        config()->set('wara.max_attempts_per_session', 3);
+
+        expect(makeLog(['attempt' => 2, 'session_key' => 'sesi-a'])->session_attempt_label)
+            ->toBe('2/3');
+
+        // 🔴 Kalau angkanya dipatok di dalam view atau accessor, config di
+        // environment tidak akan pernah mengubah apa yang tampil.
+        config()->set('wara.max_attempts_per_session', 5);
+
+        expect(makeLog(['attempt' => 2, 'session_key' => 'sesi-a'])->session_attempt_label)
+            ->toBe('2/5');
+    });
+
+    it('🔴 baris tanpa session_key tidak punya label percobaan', function () {
+        $log = makeLog(['session_key' => null, 'attempt' => null]);
+
+        expect($log->session_attempt_label)->toBeNull()
+            ->and($log->session_state)->toBe(WaraLog::SESSION_NONE);
+    });
+
+    it('🔴 baris dengan session_key tapi tanpa attempt diperlakukan sebagai none', function () {
+        // Baris lama sebelum kolom `attempt` diisi. Menampilkan "0/3" untuknya
+        // akan menyesatkan: terlihat seperti ada percobaan, padahal tidak ada
+        // yang tercatat.
+        $log = makeLog(['session_key' => 'sesi-lama', 'attempt' => null]);
+
+        expect($log->session_attempt_label)->toBeNull()
+            ->and($log->session_state)->toBe(WaraLog::SESSION_NONE);
+    });
+
+    it('🔴 attempt di bawah batas berstatus active', function () {
+        config()->set('wara.max_attempts_per_session', 3);
+
+        expect(makeLog(['session_key' => 'sesi-b', 'attempt' => 2])->session_state)
+            ->toBe(WaraLog::SESSION_ACTIVE);
+    });
+
+    it('🔴 attempt yang menyentuh batas berstatus last, bukan active', function () {
+        config()->set('wara.max_attempts_per_session', 3);
+
+        expect(makeLog(['session_key' => 'sesi-c', 'attempt' => 3])->session_state)
+            ->toBe(WaraLog::SESSION_LAST);
+    });
+
+    it('🔴 batas nol atau negatif tidak membuat semua baris jadi last', function () {
+        // `WARA_MAX_ATTEMPTS_PER_SESSION=0` berarti gateway tidak boleh mengirim
+        // sama sekali. Tanpa clamp, `attempt >= 0` membuat SETIAP baris — termasuk
+        // yang `attempt`-nya null — terbaca sebagai percobaan terakhir.
+        config()->set('wara.max_attempts_per_session', 0);
+
+        expect(makeLog(['session_key' => 'sesi-d'])->maxSessionAttempts())->toBe(1)
+            ->and(makeLog(['session_key' => 'sesi-d', 'attempt' => null])->session_state)
+            ->toBe(WaraLog::SESSION_NONE);
+    });
+
+    it('🔴 kolom Percobaan muncul di header tabel', function () {
+        $html = Livewire::test(LogTable::class)->html();
+
+        expect($html)->toContain(__('Percobaan'));
+    });
+
+    it('🔴 attempt dan session_key ter-render di baris', function () {
+        makeLog(['session_key' => 'sesi-render', 'attempt' => 2, 'body' => 'baris bersesi']);
+        makeLog(['session_key' => null, 'attempt' => null, 'body' => 'baris tanpa sesi']);
+
+        $html = Livewire::test(LogTable::class)->html();
+
+        // 🔴 Regex, bukan `toContain('2/3')`. Badge-nya dirender sebagai teks
+        // satu-satunya di antara dua tag, jadi pola `>\s*2/3\s*<` hanya cocok
+        // pada badge. Kalau pakai `toContain`, class Tailwind seperti
+        // `indigo-900/30` ikut memuat "0/3" dan assertion negatifnya bocor.
+        expect($html)->toMatch('/>\s*2\/3\s*</')
+            ->and($html)->toContain('sesi-render')
+            ->and($html)->toContain('baris bersesi');
+    });
+
+    it('🔴 baris tanpa sesi tidak menampilkan angka percobaan', function () {
+        makeLog(['session_key' => null, 'attempt' => null, 'body' => 'tanpa sesi sama sekali']);
+
+        $html = Livewire::test(LogTable::class)->html();
+
+        // Lihat catatan di test sebelumnya: `toContain('0/3')` salah positif
+        // karena ada class `...-900/30` di markup tabel.
+        expect($html)->toContain('tanpa sesi sama sekali')
+            ->and($html)->not->toMatch('/>\s*\d+\/\d+\s*</');
+    });
+
+    it('🔴 session_key bisa dicari lewat kotak pencarian', function () {
+        // 🔴 Dikasih nilai yang TIDAK muncul di kolom lain, supaya test ini benar
+        // membuktikan pencarian lewat `session_key`. Kalau `searchable` cuma
+        // berisi `message_id` dan `device_id`, baris ini tidak akan pernah muncul.
+        makeLog(['session_key' => 'cari-saya-di-sesi', 'body' => 'isi pesan biasa']);
+        makeLog(['session_key' => 'sesi-lain', 'body' => 'isi pesan lain']);
+
+        // 🔴 `searchable` diambil dari file blade yang sungguhan, lalu dipakai
+        // untuk me-mount data-table sebagai komponen root.
+        //
+        // Dua-duanya penting. `->set('query')` pada LogTable TIDAK bisa
+        // dipakai: `query` milik komponen ANAK (data-table), jadi Livewire
+        // melempar PublicPropertyNotFoundException. Dan menyalin array
+        // `searchable` secara manual di test akan membuat test tetap hijau
+        // setelah `session_key` dihapus dari file.
+        $table = file_get_contents(dirname(__DIR__, 2)
+            .'/resources/views/livewire/pages/landlord/log/section/log-table.blade.php');
+
+        preg_match('/:searchable="\[(.*?)\]"/s', $table, $match);
+
+        expect($match)->toHaveKey(1)
+            ->and($match[1])->toContain('session_key');
+
+        // 🔴 Kutip DAN spasi harus dibuang. Kalau tidak, nama kolomnya jadi
+        // `'session_key'` (dengan tanda kutip ikut) dan `LIKE` tidak akan
+        // pernah cocok — test gagal dengan pesan yang menyesatkan.
+        $searchable = array_map(
+            fn (string $column) => trim($column, " '\"\t\n\r"),
+            explode(',', $match[1])
+        );
+
+        expect($searchable)->toBe(['message_id', 'device_id', 'session_key']);
+
+        $found = Livewire::test('core-shared-components::data-table', [
+            'model' => WaraLog::class,
+            'rowView' => 'wara::livewire.pages.landlord.log.section.log-row',
+            'columns' => [['key' => 'body', 'label' => 'Isi Pesan']],
+            'searchable' => $searchable,
+        ])
+            ->set('query', 'cari-saya-di-sesi')
+            ->html();
+
+        expect($found)->toContain('isi pesan biasa')
+            ->and($found)->not->toContain('isi pesan lain');
+    });
+
+    it('🔴 session_key tetap plaintext agar bisa dicari', function () {
+        // Kontras dengan `phone`/`body` yang terenkripsi dan tidak bisa di-LIKE.
+        // Kalau `session_key` ikut dienkripsi, filter di atas akan diam-diam
+        // mengembalikan nol baris.
+        $log = makeLog(['session_key' => 'sesi-plain', 'phone' => '628123456789']);
+
+        $raw = DB::table('wara_logs')->where('id', $log->id)->first();
+
+        expect($raw->session_key)->toBe('sesi-plain')
+            ->and($raw->phone)->not->toContain('628123456789');
+    });
+
+    it('🔴 Jumlah sel sama dengan jumlah kolom', function () {
+        // Header dan body harus punya jumlah sel sama. Kalau tidak, tabel akan
+        // bergeser diam-diam: setiap baris punya satu kolom terlalu sedikit dan
+        // badge Percobaan justru jatuh ke kolom Waktu.
+        $row = file_get_contents(dirname(__DIR__, 2)
+            .'/resources/views/livewire/pages/landlord/log/section/log-row.blade.php');
+
+        $table = file_get_contents(dirname(__DIR__, 2)
+            .'/resources/views/livewire/pages/landlord/log/section/log-table.blade.php');
+
+        expect(substr_count($row, '<td '))->toBe(substr_count($table, "'key' =>"));
+    });
+});

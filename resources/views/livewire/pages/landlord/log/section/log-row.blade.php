@@ -1,3 +1,7 @@
+@php
+    use Bale\Wara\Models\WaraLog;
+@endphp
+
 <tr wire:key="wara-log-row-{{ $record->getKey() }}"
     class="hover:bg-gray-50/80 dark:hover:bg-gray-800/50 transition-colors duration-150">
 
@@ -92,6 +96,32 @@
             <span class="size-1.5 rounded-full bg-current opacity-70"></span>
             {{ $record->status_label }}
         </span>
+    </td>
+
+    {{-- Percobaan sesi --}}
+    <td class="px-4 py-3.5 hidden xl:table-cell">
+        @if ($record->session_state === WaraLog::SESSION_NONE)
+            <span class="text-sm text-gray-400 dark:text-gray-500">{{ __('—') }}</span>
+        @else
+            <span @class([
+                'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium font-mono',
+                'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 border border-amber-100 dark:border-amber-800/40' => $record->session_state === WaraLog::SESSION_LAST,
+                'bg-gray-50 text-gray-600 dark:bg-gray-800/50 dark:text-gray-400 border border-gray-100 dark:border-gray-700/60' => $record->session_state !== WaraLog::SESSION_LAST,
+            ])>
+                {{ $record->session_attempt_label }}
+            </span>
+{{--
+    🔴 `session_key` ditampilkan utuh (di-truncate, bukan disamarkan)
+    justru karena inilah yang dicari admin. Ini bukan kredensial: nilainya
+    identifier jendela/percobaan yang dibuat scraper, bukan rahasia. Disamarkan
+    justru membuat filter di tabel tidak bisa dipakai, karena yang diketik admin
+    tidak akan cocok dengan yang tersimpan.
+--}}
+<p class="text-xs font-mono text-gray-400 dark:text-gray-500 truncate mt-0.5 max-w-[12rem]"
+    title="{{ $record->session_key }}">
+    {{ $record->session_key }}
+</p>
+        @endif
     </td>
 
     {{-- Waktu --}}
