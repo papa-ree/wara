@@ -38,6 +38,28 @@ return [
                     'table' => 'wara_logs',
                 ],
                 [
+                    // 🔴 `table: 'wara_logs'` dipakai supaya item ini hilang
+                    // otomatis di instalasi yang belum menjalankan migration
+                    // analytics — persis seperti Log Pesan. Tanpa itu, menu
+                    // menampilkan tautan ke halaman yang 500.
+                    //
+                    // Diletakkan SETELAH Log Pesan: Analitik menjawab
+                    // "apakah gateway sehat", dan itu pertanyaan lanjutan.
+                    // Menaruhnya lebih dulu membuat orang mengira ini
+                    // dashboard utama saat sebenarnya baris pertamanya nol.
+                    'label' => 'Analitik',
+                    'url' => 'wara/analitik',
+                    'icon' => 'chart-line',
+                    'permission' => 'wara.log.read',
+                    'table' => 'wara_logs',
+                ],
+                [
+                    'label' => 'Dokumentasi API',
+                    'url' => 'wara/docs',
+                    'icon' => 'book-open',
+                    'permission' => 'wara.client.read',
+                ],
+                [
                     'label' => 'Status',
                     'url' => 'wara/status',
                     'icon' => 'list-checks',

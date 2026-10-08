@@ -16,7 +16,7 @@
     </td>
 
     {{-- Peta purpose -> device. Kolom utama: ini yang tidak bisa dijawab
-         dari halaman Device sejak purpose pindah ke (client, purpose). --}}
+    dari halaman Device sejak purpose pindah ke (client, purpose). --}}
     <td class="px-4 py-3.5">
         @if ($record->routes->isEmpty())
             <span class="text-xs text-gray-400 dark:text-gray-500">
@@ -27,9 +27,9 @@
                 @foreach ($record->routes->sortBy('purpose') as $route)
                     <span wire:key="wara-client-route-chip-{{ $route->getKey() }}"
                         class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border
-                            {{ $route->outbound_enabled
-                                ? 'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700'
-                                : 'bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/40' }}">
+                                                                                    {{ $route->outbound_enabled
+                    ? 'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700'
+                    : 'bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/40' }}">
                         <span class="font-mono">{{ $route->purpose }}</span>
                         <span class="text-gray-400 dark:text-gray-500" aria-hidden="true">&rarr;</span>
                         <span class="font-mono">{{ $route->device_id }}</span>
@@ -44,19 +44,21 @@
     </td>
 
     {{-- Kesiapan. Menampilkan PENYEBAB tidak bisa melayani traffic, bukan
-         sekadar badge hijau/abu, karena "aktif" saja tidak menjawab
-         pertanyaan admin: kenapa request saya ditolak? --}}
+    sekadar badge hijau/abu, karena "aktif" saja tidak menjawab
+    pertanyaan admin: kenapa request saya ditolak? --}}
     <td class="px-4 py-3.5 hidden lg:table-cell">
         @php $issues = $record->blockingReadinessIssues(); @endphp
 
         @if ($issues === [])
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
-                bg-green-50 text-green-700 border border-green-100 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800/40">
+            <span
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
+                                            bg-green-50 text-green-700 border border-green-100 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800/40">
                 {{ __('siap') }}
             </span>
         @else
-            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
-                bg-amber-50 text-amber-700 border border-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800/40"
+            <span
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium
+                                            bg-amber-50 text-amber-700 border border-amber-100 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800/40"
                 title="{{ $issues[0]['message'] }}">
                 {{ __('perlu perhatian') }}
             </span>
@@ -71,8 +73,9 @@
 
     <td class="px-4 py-3.5 whitespace-nowrap w-px">
         <livewire:core.shared-components.item-actions
-            :itemId="$record->getKey()"
-            editRoute="wara.client.edit"
+            :editUrl="route('wara.client.edit', $record->getKey())"
+            :deleteId="$record->getKey()"
+            deleteEvent="deleteWaraClient"
             :navigate="false"
             confirmMessage="{{ __('Client, route, dan endpoint webhook-nya ikut terhapus.') }}"
             wire:key="item-actions-{{ $record->getKey() }}" />

@@ -43,6 +43,15 @@ class Form extends Component
 
     public bool $is_active = true;
 
+    /** Header/footer branding pesan: teks statis yang ditempel ke semua pesan keluar client ini. */
+    public bool $headerEnabled = false;
+
+    public ?string $headerText = null;
+
+    public bool $footerEnabled = false;
+
+    public ?string $footerText = null;
+
     /** Baris route yang sedang diedit, dalam bentuk array supaya bisa di-loop di form. */
     public array $routes = [];
 
@@ -101,6 +110,10 @@ class Form extends Component
         $this->type = (string) $this->client->type;
         $this->is_active = (bool) $this->client->is_active;
         $this->apiTokenId = $this->client->api_token_id;
+        $this->headerEnabled = (bool) $this->client->header_enabled;
+        $this->headerText = $this->client->header_text;
+        $this->footerEnabled = (bool) $this->client->footer_enabled;
+        $this->footerText = $this->client->footer_text;
 
         $this->routes = $this->client->routes()
             ->orderBy('purpose')
@@ -136,6 +149,10 @@ class Form extends Component
         $this->type = WaraClient::TYPE_SERVICE;
         $this->is_active = true;
         $this->apiTokenId = null;
+        $this->headerEnabled = false;
+        $this->headerText = null;
+        $this->footerEnabled = false;
+        $this->footerText = null;
         $this->routes = [];
         $this->resetEndpointForm();
     }
@@ -207,20 +224,27 @@ class Form extends Component
             ->map(function (object $token) use ($ownerByToken): array {
                 $owner = $ownerByToken->get($token->getKey());
 
+                // 🔴 Token milik client YANG SEDANG DIEDIT tetap harus bisa
+                // dipilih; kalau di-disabled, menyimpan ulang client token
+                // gagal di validasi `required_if`. `dipakai client: :name`
+                // untuk diri sendiri juga tidak perlu ditampilkan.
+                $isOwnerSelf = (bool) $this->client?->exists
+                    && (string) $owner?->getKey() === (string) $this->client?->getKey();
+
                 $label = (string) $token->name;
 
                 if ($token->revoked_at !== null) {
                     $label .= ' — '.__('revoked');
                 }
 
-                if ($owner !== null) {
+                if ($owner !== null && ! $isOwnerSelf) {
                     $label .= ' — '.__('dipakai client: :name', ['name' => $owner->name]);
                 }
 
                 return [
                     'id' => (string) $token->getKey(),
                     'label' => $label,
-                    'available' => $owner === null,
+                    'available' => $owner === null || $isOwnerSelf,
                 ];
             })
             ->values()
@@ -292,6 +316,13 @@ class Form extends Component
                 Rule::notIn($this->tokensOwnedByOtherClients()),
             ],
             'routes' => ['array'],
+            // 🔴 Branding pesan: teks statis, wajib terisi kalau toggle-nya
+            // menyala. Tanpa `required_if`, header kosong tetap diterima lalu
+            // diam-diam tidak ditempelkan - admin mengira brandingnya aktif.
+            'headerEnabled' => ['boolean'],
+            'headerText' => ['nullable', 'string', 'max:500', 'required_if:headerEnabled,true'],
+            'footerEnabled' => ['boolean'],
+            'footerText' => ['nullable', 'string', 'max:500', 'required_if:footerEnabled,true'],
             // 🔴 `routes.*.id` WAJIB punya aturan. Tanpa itu `validate()`
             // mengembalikan array route TANPA kunci `id`, `syncRoutes()`
             // menganggap setiap baris itu baru, dan mengedit client akan
@@ -312,6 +343,10 @@ class Form extends Component
                 'type' => $validated['type'],
                 'name' => $validated['name'],
                 'is_active' => $validated['is_active'],
+                'header_enabled' => (bool) $validated['headerEnabled'],
+                'header_text' => $validated['headerText'] ?? null,
+                'footer_enabled' => (bool) $validated['footerEnabled'],
+                'footer_text' => $validated['footerText'] ?? null,
             ])->save();
 
             $this->client = $client;
@@ -320,6 +355,10 @@ class Form extends Component
                 'type' => $validated['type'],
                 'name' => $validated['name'],
                 'is_active' => $validated['is_active'],
+                'header_enabled' => (bool) $validated['headerEnabled'],
+                'header_text' => $validated['headerText'] ?? null,
+                'footer_enabled' => (bool) $validated['footerEnabled'],
+                'footer_text' => $validated['footerText'] ?? null,
             ])->save();
         }
 

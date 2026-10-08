@@ -8,13 +8,15 @@ use Illuminate\Support\Facades\File;
 /**
  * Publish migration stub `.php.stub` ke `database/migrations` aplikasi.
  *
- * File yang ditulis diberi prefix timestamp (`Y_m_d_His_`) supaya urutannya
- * mengikuti waktu publish, sama seperti `make:migration` bawaan Laravel. Tanpa
- * prefix itu, urutan eksekusi migration jadi tidak deterministik.
+ * Stub sudah membawa prefix timestamp sendiri (`Y_m_d_NNNNNN_`, konvensi yang
+ * sama dengan `packages/loker/database/migrations`), jadi urutan eksekusi
+ * migration deterministik — ditentukan di stub, bukan waktu publish. File yang
+ * ditulis = nama stub dengan ekstensi `.stub` dibuang.
  *
- * Karena prefix timestamp membuat nama file berbeda tiap publish, "sudah ada"
- * dideteksi lewat **nama migration tanpa timestamp** — bukan lewat nama file.
- * Jadi command ini tetap aman dijalankan berulang kali.
+ * "Sudah ada" dideteksi lewat **nama migration logis** (nama file tanpa prefix
+ * timestamp dan tanpa `.stub`) — bukan lewat nama file. Jadi command ini aman
+ * dijalankan berulang kali, dan juga mengenali file yang dipublish oleh versi
+ * lama yang memakai prefix `Y_m_d_His` dari `make:migration`.
  */
 class PublishMigrationCommand extends Command
 {
@@ -41,10 +43,7 @@ class PublishMigrationCommand extends Command
                 continue;
             }
 
-            // `basename(..., '.stub')` menyisakan satu ekstensi: hasilnya
-            // `create_wara_sessions_table.php`, bukan tanpa `.php`.
-            $name = basename($filename, '.php.stub');
-            $target = $this->findExisting($name);
+            $target = self::existingTarget(self::logicalName($filename));
 
             if ($target !== null) {
                 $skipped++;
@@ -53,8 +52,7 @@ class PublishMigrationCommand extends Command
                 continue;
             }
 
-            $new = database_path(sprintf('migrations/%s_%s.php', date('Y_m_d_His'), $name));
-
+            $new = database_path('migrations/'.basename($filename, '.php.stub').'.php');
             File::copy($file->getRealPath(), $new);
             $published++;
             $this->line(sprintf('  + Dipublish: %s', basename($new)));
@@ -67,12 +65,25 @@ class PublishMigrationCommand extends Command
     }
 
     /**
-     * Cari file yang sudah contiene migration dengan nama yang sama,
-     * mengabaikan prefix timestamp.
+     * Nama migration logis: basename tanpa `.php.stub` dan tanpa prefix
+     * timestamp `Y_m_d_NNNNNN_`. Contoh: `2026_09_29_000001_create_wara_logs_table`
+     * → `create_wara_logs_table`.
      */
-    protected function findExisting(string $name): ?string
+    public static function logicalName(string $filename): string
     {
-        $pattern = database_path('migrations/*_'.$name.'.php');
+        $name = basename($filename, '.php.stub');
+
+        return preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $name) ?? $name;
+    }
+
+    /**
+     * Cari file di aplikasi yang sudah berisi migration dengan nama logis yang
+     * sama, mengabaikan prefix timestamp. Mengenali juga file tanpa timestamp
+     * (dipublish oleh versi paling lama).
+     */
+    public static function existingTarget(string $logical): ?string
+    {
+        $pattern = database_path('migrations/*_'.$logical.'.php');
 
         $matches = glob($pattern);
 
@@ -80,8 +91,7 @@ class PublishMigrationCommand extends Command
             return $matches[0];
         }
 
-        // Jugota file tanpa timestamp (dipublish oleh versi lama).
-        $legacy = database_path('migrations/'.$name.'.php');
+        $legacy = database_path('migrations/'.$logical.'.php');
 
         return file_exists($legacy) ? $legacy : null;
     }

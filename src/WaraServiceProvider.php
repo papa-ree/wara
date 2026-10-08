@@ -251,11 +251,20 @@ class WaraServiceProvider extends ServiceProvider
         }
 
         foreach (glob($sourcePath.'*.php.stub') as $file) {
-            $name = basename($file, '.stub');
+            $filename = basename($file);
 
-            $migrations[$file] = database_path(
-                sprintf('migrations/%s_%s.php', date('Y_m_d_His'), $name)
+            // Stub membawa prefix timestamp sendiri (konvensi loker), jadi
+            // file tujuan memakai nama itu apa adanya (`.stub` dibuang). Kalau
+            // migration dengan nama logis yang sama sudah ada di aplikasi
+            // (mis. dipublish versi lama dengan prefix `Y_m_d_His`), peta-kan
+            // ke file itu supaya `vendor:publish` melewatinya tanpa membuat
+            // duplikat migration.
+            $existing = PublishMigrationCommand::existingTarget(
+                PublishMigrationCommand::logicalName($filename)
             );
+
+            $migrations[$file] = $existing
+                ?? database_path('migrations/'.basename($filename, '.php.stub').'.php');
         }
 
         return $migrations;

@@ -1,17 +1,22 @@
 <div class="space-y-6">
-    <div class="flex items-center justify-between gap-4">
-        <div>
-            <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{{ __('Client Wara') }}</h1>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ __('Siapa yang boleh memakai gateway, dan device mana yang dipakai untuk tiap tujuan layanan.') }}
-            </p>
-        </div>
+    <x-core::breadcrumb
+        :items="[]"
+        :active="__('Client Wara')" />
 
-        <a href="{{ route('wara.client.create') }}"
-            class="flex-none rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
-            {{ __('Client Baru') }}
-        </a>
-    </div>
+    <x-core::page-header
+        :title="__('Client Wara')"
+        :subtitle="__('Siapa yang boleh memakai gateway, dan device mana yang dipakai untuk tiap tujuan layanan.')">
+        <x-slot name="action">
+            <x-core::button
+                link
+                href="{{ route('wara.client.create') }}"
+                label="{{ __('Client Baru') }}">
+                <x-slot name="icon">
+                    <x-lucide-plus class="w-4 h-4" />
+                </x-slot>
+            </x-core::button>
+        </x-slot>
+    </x-core::page-header>
 
     <livewire:wara.pages.landlord.client.section.client-table />
 </div>

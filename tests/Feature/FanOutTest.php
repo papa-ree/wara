@@ -23,7 +23,7 @@ beforeEach(function () {
     // RefreshDatabase sudah membuatnya. Stub tetap dijalankan kalau tabel belum
     // ada (mis. test dijalankan sebelum `wara:publish-migration`).
     if (! Schema::hasTable('wara_consumer_deliveries')) {
-        $migration = require __DIR__.'/../../database/migrations/create_wara_consumer_deliveries_table.php.stub';
+        $migration = require __DIR__.'/../../database/migrations/2026_09_29_000003_create_wara_consumer_deliveries_table.php.stub';
         $migration->up();
     }
 });

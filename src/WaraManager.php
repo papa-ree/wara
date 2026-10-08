@@ -81,17 +81,22 @@ class WaraManager
 
         $startedAt = microtime(true);
 
+        // Branding per client (header/footer statis, diatur di form Client)
+        // diterapkan SEBELUM pesan masuk gateway, supaya gateway, `wara_logs`,
+        // dan konsumen lain melihat pesan yang sama persis.
+        $finalMessage = $this->applyClientBranding($client, $message);
+
         try {
-            $result = $this->gateway->sendText($session->device_id, $normalized, $message);
+            $result = $this->gateway->sendText($session->device_id, $normalized, $finalMessage);
         } catch (GatewayException $e) {
             // Percobaan yang gagal tetap dicatat: pola restriksi harus terlihat
             // SEBELUM kejadian (PRD §10.2), bukan setelah.
             $this->markDeviceBackoff($session);
 
-            $this->recordOutgoing($session, $normalized, $message, $sessionKey, $attempt, SendResult::rejected(
+            $this->recordOutgoing($session, $normalized, $finalMessage, $sessionKey, $attempt, SendResult::rejected(
                 'GATEWAY_ERROR',
                 $e->getMessage()
-            ));
+            ), $client, null);
 
             throw $e;
         }
@@ -99,7 +104,9 @@ class WaraManager
         $this->pacer->recordSend($normalized, $attempt);
         $this->pacer->clearDeviceBackoff($session->device_id);
 
-        $this->recordOutgoing($session, $normalized, $message, $sessionKey, $attempt, $result);
+        $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+        $this->recordOutgoing($session, $normalized, $finalMessage, $sessionKey, $attempt, $result, $client, $latencyMs);
 
         // Event korelasi (PRD §13.4). Dipancarkan di sini, bukan di channel,
         // supaya pengiriman internal (mis. `sendOtp()` dari `bale/srikandi`)
@@ -111,7 +118,7 @@ class WaraManager
             destination: $normalized,
             deviceId: $session->device_id,
             messageId: $result->messageId,
-            latencyMs: (int) round((microtime(true) - $startedAt) * 1000),
+            latencyMs: $latencyMs,
             notification: $notification,
         );
 
@@ -353,24 +360,65 @@ class WaraManager
         ?string $sessionKey,
         ?int $attempt,
         SendResult $result,
+        ?WaraClient $client = null,
+        ?int $latencyMs = null,
     ): void {
         try {
             WaraLog::query()->create([
                 'direction' => 'out',
                 'event' => 'message',
                 'device_id' => $session->device_id,
+                // 🔴 Hanya untuk arah keluar (PRD §14). Inbound tidak bisa
+                // diatribusikan: webhook hanya tahu `device_id`, dan satu
+                // device boleh melayani banyak client. `WebHookController`
+                // tidak pernah mengisi kolom ini.
+                'client_id' => $client?->id,
                 'phone' => $phone,
                 'message_id' => $result->messageId,
                 'body' => $body,
                 'status' => $result->accepted ? 'accepted' : 'rejected',
                 'session_key' => $sessionKey,
                 'attempt' => $attempt,
+                // Null berarti "tidak terukur" — jalur `GatewayException` tidak
+                // punya angka yang jujur. Lihat catatan migration.
+                'latency_ms' => $latencyMs,
             ]);
         } catch (\Throwable $e) {
             Log::warning('Gagal mencatat pesan keluar Wara ke wara_logs', [
                 'message' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Terapkan header/footer branding milik client, kalau client punya.
+     *
+     * Branding adalah teks statis per client (admin-only, diatur di form
+     * Client) yang ditempelkan ke SEMUA pesan keluar atas nama client itu,
+     * dipisah body dengan dua newline. Toggle mati atau teks kosong berarti
+     * pesan dikirim apa adanya.
+     *
+     * Pemanggil tanpa `?WaraClient` (mis. `WaraChannel`, jalur internal) tidak
+     * punya client yang bisa membranding, jadi method ini membiarkannya lewat.
+     */
+    protected function applyClientBranding(?WaraClient $client, string $message): string
+    {
+        if ($client === null) {
+            return $message;
+        }
+
+        $header = $client->header_enabled ? trim((string) $client->header_text) : '';
+        $footer = $client->footer_enabled ? trim((string) $client->footer_text) : '';
+
+        if ($header !== '') {
+            $message = $header."\n\n".$message;
+        }
+
+        if ($footer !== '') {
+            $message .= "\n\n".$footer;
+        }
+
+        return $message;
     }
 
     protected function buildOtpMessage(string $otpCode): string

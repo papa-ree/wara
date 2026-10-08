@@ -7,6 +7,7 @@ use Bale\Wara\Models\WaraClient;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\On;
 use Livewire\Component;
 use Throwable;
 
@@ -33,6 +34,27 @@ class ClientTable extends Component
     public function mount(): void
     {
         $this->authorize('wara.client.read');
+    }
+
+    /**
+     * Listener hapus untuk baris client.
+     *
+     * 🔴 Nama event sengaja BUKAN `deleteItem`. `data-table` yang merender baris
+     * ini juga memasang `#[On('deleteItem')]` dengan penghapusan generik — tanpa
+     * authorization `wara.client.delete`, tanpa cascade route/endpoint, tanpa
+     * transaksi. Event Livewire dikirim ke SEMUA komponen yang mendengarnya, jadi
+     * kalau baris memakai `deleteItem` bawaan ItemActions, data-table akan
+     * menghapus client mentah-mentah lebih dulu dan override `performDelete()` di
+     * bawah tidak pernah menangani apa-apa.
+     *
+     * Karena itu item-actions di `client-row`/`client-card` memakai
+     * `deleteEvent="deleteWaraClient"` — event ini hanya didengar komponen ini.
+     */
+    #[On('deleteWaraClient')]
+    public function deleteWaraClient($id): void
+    {
+        $this->deleteId = $id;
+        $this->performDelete();
     }
 
     /**

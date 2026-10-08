@@ -14,8 +14,20 @@ use Illuminate\Support\Facades\Schema;
  *   - keduanya tidak di-index
  *   - keduanya tidak bisa dicari dengan LIKE
  *   - keduanya tidak bisa dipakai sebagai filter `activeFilters`
- * Kolom `direction`, `device_id`, `status`, dan `message_id` sengaja dibiarkan
- * plaintext supaya tetap bisa disaring dan dicari.
+ * Kolom `direction`, `device_id`, `status`, `message_id`, `client_id`, dan
+ * `latency_ms` sengaja dibiarkan plaintext supaya tetap bisa disaring dan dicari.
+ *
+ * Dua kolom analitik (PRD §14) digabung ke migration create, bukan file
+ * terpisah, supaya `wara_logs` punya satu sumber skema:
+ *   - `client_id` — HANYA untuk arah KELUAR. `WaraManager::sendMessage()` sudah
+ *     memegang objek `WaraClient` saat menulis baris keluar; webhook inbound
+ *     hanya tahu `device_id` dan `wara_routes` mengizinkan SATU device melayani
+ *     BANYAK client (`UNIQUE (client_id, purpose)` per pasangan), jadi inbound
+ *     membiarkannya null. Kalau diam-diam terisi untuk inbound, itu kebocoran
+ *     lintas akun dan harus dianggap bug (keputusan PRD §14.3, 5 Okt 2026).
+ *   - `latency_ms` — dihitung hanya pada jalur sukses; jalur `GatewayException`
+ *     tidak punya angka yang jujur, jadi nullable = "tidak terukur", BUKAN 0.
+ *     Kalau diisi 0, grafik menampilkan tunda 0ms untuk pesan yang justru gagal.
  */
 return new class extends Migration
 {
@@ -31,6 +43,9 @@ return new class extends Migration
             // Session ID device yang mengirim/menerima.
             $table->string('device_id', 191)->nullable()->index();
 
+            // Client pemilik pesan KELUAR; null untuk inbound (lihat docblock).
+            $table->uuid('client_id')->nullable()->index();
+
             $table->string('chat_id', 191)->nullable();
 
             $table->string('message_id', 191)->nullable()->index();
@@ -40,6 +55,9 @@ return new class extends Migration
             // Konteks khusus pacing & anti-ban (PRD §8.2).
             $table->string('session_key')->nullable()->index();
             $table->unsignedSmallInteger('attempt')->nullable();
+
+            // Durability pesan keluar dalam ms; null = tidak terukur (gagal).
+            $table->unsignedInteger('latency_ms')->nullable();
 
             $table->timestamps();
 

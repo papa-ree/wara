@@ -393,3 +393,68 @@ describe('batas gateway tidak bocor (PRD §11.2)', function () {
             ->and($manager)->not->toContain('X-Hub-Signature-256');
     });
 });
+
+describe('branding pesan per client (header/footer)', function () {
+    it('header dan footer ditempelkan ke pesan yang dikirim ke gateway', function () {
+        Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-brand'], 200)]);
+        $session = makeSessionGatewayIntegrationTest();
+
+        $client = makeClientGatewayIntegrationTest();
+        $client->forceFill([
+            'header_enabled' => true,
+            'header_text' => 'Halo dari Bale',
+            'footer_enabled' => true,
+            'footer_text' => 'Jangan balas pesan ini',
+        ])->save();
+
+        $this->manager->sendMessage('628999888777', 'isi pesan', null, $session->device_id, null, null, $client);
+
+        Http::assertSent(function ($request) {
+            return str_starts_with($request['message'], "Halo dari Bale\n\n")
+                && str_contains($request['message'], 'isi pesan')
+                && str_ends_with($request['message'], "\n\nJangan balas pesan ini");
+        });
+
+        // Yang tercatat di log adalah pesan yang BENAR-BENAR dikirim,
+        // bukan body mentah sebelum branding.
+        expect(WaraLog::query()->first()->body)
+            ->toContain("Halo dari Bale\n\nisi pesan\n\nJangan balas pesan ini");
+    });
+
+    it('client tanpa branding mengirim pesan apa adanya', function () {
+        Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-plain'], 200)]);
+        $session = makeSessionGatewayIntegrationTest();
+
+        $client = makeClientGatewayIntegrationTest();
+
+        $this->manager->sendMessage('628999888777', 'isi pesan', null, $session->device_id, null, null, $client);
+
+        Http::assertSent(fn ($request) => $request['message'] === 'isi pesan');
+    });
+
+    it('toggle mati berarti teks tidak ditempelkan walau kolomnya terisi', function () {
+        Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-off'], 200)]);
+        $session = makeSessionGatewayIntegrationTest();
+
+        $client = makeClientGatewayIntegrationTest();
+        $client->forceFill([
+            'header_enabled' => false,
+            'header_text' => 'Draft header',
+            'footer_enabled' => false,
+            'footer_text' => 'Draft footer',
+        ])->save();
+
+        $this->manager->sendMessage('628999888777', 'isi pesan', null, $session->device_id, null, null, $client);
+
+        Http::assertSent(fn ($request) => $request['message'] === 'isi pesan');
+    });
+
+    it('pemanggil tanpa client (jalur internal) tidak diberi branding', function () {
+        Http::fake(['gateway.test/*' => Http::response(['message_id' => 'msg-internal'], 200)]);
+        $session = makeSessionGatewayIntegrationTest();
+
+        $this->manager->sendMessage('628999888777', 'isi pesan', null, $session->device_id);
+
+        Http::assertSent(fn ($request) => $request['message'] === 'isi pesan');
+    });
+});

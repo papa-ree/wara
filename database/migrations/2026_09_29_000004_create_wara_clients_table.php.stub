@@ -55,6 +55,17 @@ return new class extends Migration
             // Client nonaktif harus gagal diam-diam, bukan tetap melayani.
             $table->boolean('is_active')->default(true);
 
+            // Branding pesan per client: teks statis yang disimpan di client
+            // dan ditempelkan `WaraManager::sendMessage()` ke SEMUA pesan yang
+            // dikirim atas nama client ini, dipisah body dengan dua newline.
+            //
+            // Kolom ini digabung ke migration create (bukan migration terpisah)
+            // supaya `wara_clients` punya satu sumber skema saja.
+            $table->boolean('header_enabled')->default(false);
+            $table->text('header_text')->nullable();
+            $table->boolean('footer_enabled')->default(false);
+            $table->text('footer_text')->nullable();
+
             $table->timestamps();
 
             $table->index(['type', 'is_active']);

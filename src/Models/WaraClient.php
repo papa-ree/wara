@@ -29,6 +29,10 @@ use Spatie\Activitylog\Support\LogOptions;
  * @property string|null $api_token_id
  * @property string $name
  * @property bool $is_active
+ * @property bool $header_enabled
+ * @property string|null $header_text
+ * @property bool $footer_enabled
+ * @property string|null $footer_text
  */
 class WaraClient extends Model
 {
@@ -83,16 +87,26 @@ class WaraClient extends Model
         'type',
         'name',
         'is_active',
+        'header_enabled',
+        'header_text',
+        'footer_enabled',
+        'footer_text',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'header_enabled' => 'boolean',
+        'footer_enabled' => 'boolean',
     ];
 
     public const LOGGED_ATTRIBUTES = [
         'type',
         'name',
         'is_active',
+        'header_enabled',
+        'header_text',
+        'footer_enabled',
+        'footer_text',
     ];
 
     public function getActivitylogOptions(): LogOptions

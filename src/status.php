@@ -34,11 +34,13 @@ return [
 
     'title' => 'Status bale/wara',
 
-    'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13; '
-        .'sisa yang tercatat adalah persiapan produksi dan keputusan yang masih terbuka, bukan fitur '
-        .'yang belum dibangun. Daftar kerjanya di `docs/wara/TODO.md`.',
+    'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13, '
+        .'dan Halaman Analitik (A1+A2) selesai 6 Okt 2026; branding pesan per client (header/footer) '
+        .'dibangun dari nol 7 Okt 2026; sisa yang tercatat adalah persiapan '
+        .'produksi dan keputusan yang masih terbuka (A3-A5). Daftar kerjanya di '
+        .'`docs/wara/TODO.md`.',
 
-    'updated_at' => '2026-10-04',
+    'updated_at' => '2026-10-07',
 
     'doc' => [
         'label' => 'Dokumen',
@@ -190,6 +192,32 @@ return [
         [
             'title' => 'Keputusan teknis yang masih terbuka',
             'items' => [
+                [
+                    'label' => 'Halaman Analitik gateway & router',
+                    'status' => 'done',
+                    'meta' => 'PRD §14, 5 Okt 2026',
+                    'note' => 'A1+A2 selesai 6 Okt 2026: `WaraAnalytics` (volume, funnel, atribusi '
+                        .'keluar per client, trafik per device, latency, fan-out per endpoint, sesi '
+                        .'exhausted) plus halaman `/wara/analitik` di `wara.log.read`. A2 mengisi '
+                        .'`client_id` + `latency_ms` di `wara_logs`. '
+                        .'🔴 Atribusi hanya untuk pesan KELUAR: inbound tidak bisa diatribusikan '
+                        .'karena satu device boleh melayani banyak client (`UNIQUE (client_id, '
+                        .'purpose)`), dan halaman menyatakan itu secara terbuka. `latency_ms` null '
+                        .'pada baris `rejected` karena `GatewayException` tidak punya angka yang jujur. '
+                        .'Sisa: A3 (butuh verifikasi `message_id` GOWA di browser), A4, A5. '
+                        .'Rencana di `PLAN.md` §17, daftar kerja di `TODO.md` §A1-A5.',
+                ],
+                [
+                    'label' => 'Branding pesan per client (header/footer)',
+                    'status' => 'done',
+                    'meta' => '7 Okt 2026',
+                    'note' => '🔴 Fitur ini tidak pernah ada di kode sebelumnya (audit 7 Okt 2026): '
+                        .'nol kolom, nol properti form, nol logika. Sekarang: 4 kolom di `wara_clients` '
+                        .'(merge ke migrasi create, tanpa file terpisah), section "Branding Pesan" di '
+                        .'form Client dengan validasi `required_if`, dan `WaraManager::applyClientBranding()` '
+                        .'yang menempelkan `header\n\nbody\n\nfooter` ke pesan yang dikirim DAN yang '
+                        .'dicatat di log. 8 test baru; daftar kerja di `docs/wara/TODO.md` §B.',
+                ],
                 [
                     'label' => 'Enkripsi `chat_id` dan `wara_sessions.jid`',
                     'status' => 'done',

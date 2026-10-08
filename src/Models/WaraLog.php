@@ -6,6 +6,7 @@ use Bale\Wara\Support\SensitiveData;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Log pesan masuk dan keluar (PRD §7).
@@ -21,6 +22,8 @@ use Illuminate\Database\Eloquent\Model;
  * @property string|null $status
  * @property string|null $session_key
  * @property int|null $attempt
+ * @property string|null $client_id Hanya untuk `direction = 'out'` (PRD §14)
+ * @property int|null $latency_ms Null berarti tidak terukur, bukan nol
  */
 class WaraLog extends Model
 {
@@ -42,6 +45,7 @@ class WaraLog extends Model
         'direction',
         'event',
         'device_id',
+        'client_id',
         'chat_id',
         'phone',
         'message_id',
@@ -49,7 +53,24 @@ class WaraLog extends Model
         'status',
         'session_key',
         'attempt',
+        'latency_ms',
     ];
+
+    /**
+     * `client_id` HANYA boleh terisi untuk `direction = 'out'` (PRD §14).
+     *
+     * Arah inbound tidak bisa diatribusikan: webhook hanya tahu `device_id`, dan
+     * satu device boleh melayani banyak client (`UNIQUE (client_id, purpose)`).
+     * Detail ketiga pilihan yang tidak dipakai ada di PRD §14.3.
+     *
+     * Ini murni untuk agregasi analitik. Halaman Log tidak menampilkannya, dan
+     * tidak ada pencarian per client di sana — kalau nanti butuh "pesan client X",
+     * itu keputusan terpisah, bukan konsekuensi kolom ini.
+     */
+    public function client(): BelongsTo
+    {
+        return $this->belongsTo(WaraClient::class, 'client_id');
+    }
 
     /**
      * `phone` dan `body` dienkripsi, sama seperti `wa_number` pada Aduan
@@ -62,6 +83,14 @@ class WaraLog extends Model
     protected $casts = [
         'phone' => 'encrypted',
         'body' => 'encrypted',
+        // 🔴 `attempt` sengaja TIDAK di-cast ke integer: null berarti "tanpa
+        // sessionKey", dan perbedaan null-vs-0 itu yang dipakai test untuk
+        // memastikan pencatatan tetap benar.
+        //
+        // `latency_ms` juga dibiarkan apa adanya: nilainya hanya dibaca lewat
+        // agregasi SQL (`AVG`, `MAX`) yang mengembalikan angka, bukan lewat
+        // casting atribut. Menambah cast hanya menambah satu tempat yang bisa
+        // salah.
     ];
 
     public function scopeIncoming(Builder $query): Builder

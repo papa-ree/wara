@@ -24,14 +24,12 @@ beforeEach(function () {
 /*
  * 🔴 KONTRAK PROP `item-actions`.
  *
- * `client-row.blade.php` mengirim `:itemId` dan `editRoute`, tapi
  * `Bale\Core\Livewire\SharedComponents\ItemActions` hanya punya `$editUrl` dan
- * `$deleteId`. Kalau benar, `@if($editUrl)` dan `@if($deleteId)` bernilai false
- * dan tombol edit/delete di baris Client tidak pernah dirender — jadi halaman
- * Client tidak punya cara mengedit client dari daftar.
- *
- * `AGENTS.md` mendokumentasikan `deleteId`, jadi prop yang tidak ada berarti
- * view-nya yang tidak cocok dengan dokumentasi.
+ * `$deleteId` (plus opsional `deleteEvent`, `modelName`, `confirmMessage`,
+ * `navigate`). View wara tidak boleh memakai `itemId`/`editRoute` — keduanya
+ * tidak dikenal komponen, sehingga `@if($editUrl)`/`@if($deleteId)` bernilai
+ * false dan tombol di baris tidak pernah dirender. Test ini mengunci bahwa
+ * kontrak component tidak berubah melenceng dari dokumen AGENTS.md.
  */
 it('🔴 mengunci prop yang benar-benar dimiliki ItemActions', function () {
     $reflection = new ReflectionClass(ItemActions::class);
@@ -49,21 +47,23 @@ it('🔴 mengunci prop yang benar-benar dimiliki ItemActions', function () {
 });
 
 /*
- * 🔴 DUA TEST DI BAWAH INI MENANDAI BUG YANG NYATA, DAN SENGAJA DI-SKIP.
+ * DUA TEST DI BAWAH INI mengunci perilaku T0 yang sudah diperbaiki
+ * (lihat docs/wara/TODO.md P0 & PLAN-TEMA Fase T0, 8 Okt 2026).
  *
- * Bugs-nya (terverifikasi 4 Okt 2026, lihat docs/wara/TODO.md P0): halaman
- * Client tidak punya tombol edit maupun hapus, karena `client-row` dan
- * `client-card` mengirim prop yang tidak dimiliki component.
+ * Sebelumnya `client-row` mengirim `:itemId`/`editRoute` dan `client-card`
+ * `:editUrl` tanpa `:deleteId` — dua-duanya bukan kontrak `ItemActions`,
+ * jadi tombol edit/delete tidak pernah dirender dan daftar Client read-only
+ * diam-diam. Sekarang keduanya memakai `:editUrl` + `:deleteId`.
  *
- * Test-nya sengaja TIDAK dibiarkan gagal. Suite merah yang-alasannya "sudah
- * diketahui" adalah cara tercepat membuat semua test diabaikan — termasuk yang
- * menangkap bug baru. Yang dilakukan: assertion-nya tetap ada sebagai
- * spesifikasi, tapi di-skip sampai bug-nya diperbaiki.
- *
- * Hapus tanda `skip()` saat `client-row`/`client-card` sudah pakai `:editUrl`
- * dan `:deleteId`.
+ * Selain itu, item-actions baris client memakai `deleteEvent="deleteWaraClient"`
+ * BUKAN `deleteItem`. `data-table` yang merender baris juga memasang
+ * `#[On('deleteItem')]` dengan penghapusan generik (tanpa authorization,
+ * tanpa cascade route/endpoint, tanpa transaksi). Livewire mengirim event ke
+ * SEMUA komponen yang mendengarnya — kalau memakai `deleteItem`, data-table
+ * menghapus client mentah-mentah lebih dulu dan override `performDelete()` di
+ * `ClientTable` (authorize + transaksi + cascade) tidak pernah mengeksekusi.
  */
-it('🔴 baris Client harus merender link edit dan aksi hapus', function () {
+it('baris Client harus merender link edit dan aksi hapus', function () {
     $client = WaraClient::query()->create([
         'type' => WaraClient::TYPE_SERVICE,
         'name' => 'Client Audit Sementara',
@@ -72,17 +72,16 @@ it('🔴 baris Client harus merender link edit dan aksi hapus', function () {
 
     $html = Livewire::test(ClientIndex::class)->html();
 
-    // 🔴 Kalau `editRoute`/`itemId` tidak didukung component, kedua ini hilang
-    // dan daftar Client jadi read-only tanpa ada yang memberitahu.
     expect($html)
         ->toContain('Client Audit Sementara')
         ->toContain(route('wara.client.edit', $client))
         ->toContain('hs-delete-dropdown-'.$client->getKey());
-})->skip();
+});
 
-it('🔴 device-row dan client-row konsisten memakai pola prop yang sama', function () {
-    // Dua row harus memanggil component dengan kontrak yang sama. Kalau device
-    // benar dan client salah, keduanya tidak akan pernah sinkron diam-diam.
+it('device-row dan client-row konsisten memakai pola prop yang sama', function () {
+    // Dua row harus memanggil component dengan kontrak yang sama. Device
+    // sengaja TIDAK bisa dihapus (desain), jadi hanya client yang mengirim
+    // `deleteId`.
     $clientRow = file_get_contents(dirname(__DIR__, 2)
         .'/resources/views/livewire/pages/landlord/client/section/client-row.blade.php');
 
@@ -91,8 +90,10 @@ it('🔴 device-row dan client-row konsisten memakai pola prop yang sama', funct
 
     expect($clientRow)->toContain(':editUrl=')
         ->and($clientRow)->toContain(':deleteId=')
+        ->and($clientRow)->toContain('deleteEvent="deleteWaraClient"')
         ->and($clientRow)->not->toContain('editRoute=')
         ->and($clientRow)->not->toContain(':itemId=')
+        ->and($clientRow)->not->toContain('deleteEvent="deleteItem"')
         ->and($deviceRow)->toContain(':editUrl=')
-        ->and($deviceRow)->toContain(':deleteId=');
-})->skip();
+        ->and($deviceRow)->not->toContain(':deleteId=');
+});

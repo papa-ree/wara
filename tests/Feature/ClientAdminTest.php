@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\User;
+use Bale\Api\Models\ApiToken;
 use Bale\Api\Services\TokenManager;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Form as ClientForm;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Index as ClientIndex;
@@ -604,8 +605,8 @@ describe('tipe client tenant dibuang', function () {
         Livewire::actingAs($this->user)
             ->test(ClientForm::class)
             ->assertOk()
-            ->assertSee('<option value="token">token</option>', escape: false)
-            ->assertSee('<option value="service">service</option>', escape: false)
+            ->assertSee('<option value="token"', escape: false)
+            ->assertSee('<option value="service"', escape: false)
             ->assertDontSee('<option value="tenant">', escape: false);
     });
 
@@ -643,5 +644,311 @@ describe('tipe client tenant dibuang', function () {
         expect($client->fresh()->type)->toBe('tenant')
             ->and(WaraClient::TYPES)->not->toContain('tenant')
             ->and($resolved?->getKey())->not->toBe($client->getKey());
+    });
+});
+
+describe('branding pesan per client (header/footer)', function () {
+    it('menyimpan header dan footer branding dari form', function () {
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'Client Brand')
+            ->set('type', WaraClient::TYPE_SERVICE)
+            ->set('headerEnabled', true)
+            ->set('headerText', 'Portal Resmi Bale')
+            ->set('footerEnabled', true)
+            ->set('footerText', 'Balas STOP untuk berhenti.')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $client = WaraClient::query()->where('name', 'Client Brand')->firstOrFail();
+
+        expect($client->header_enabled)->toBeTrue()
+            ->and($client->header_text)->toBe('Portal Resmi Bale')
+            ->and($client->footer_enabled)->toBeTrue()
+            ->and($client->footer_text)->toBe('Balas STOP untuk berhenti.');
+    });
+
+    it('toggle header menyala tanpa teks ditolak, client tidak tersimpan', function () {
+        // Tanpa required_if ini, admin mengira brandingnya aktif padahal
+        // header kosong tidak pernah ditempelkan ke pesan mana pun.
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'Tanpa Teks Header')
+            ->set('type', WaraClient::TYPE_SERVICE)
+            ->set('headerEnabled', true)
+            ->set('headerText', null)
+            ->call('save')
+            ->assertHasErrors('headerText');
+
+        expect(WaraClient::query()->where('name', 'Tanpa Teks Header')->exists())->toBeFalse();
+    });
+
+    it('toggle mati menyimpan teksnya (draft) tanpa error', function () {
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class)
+            ->set('name', 'Draft Footer')
+            ->set('type', WaraClient::TYPE_SERVICE)
+            ->set('footerEnabled', false)
+            ->set('footerText', 'Nanti dipakai')
+            ->call('save')
+            ->assertHasNoErrors();
+
+        $client = WaraClient::query()->where('name', 'Draft Footer')->firstOrFail();
+
+        expect($client->footer_enabled)->toBeFalse()
+            ->and($client->footer_text)->toBe('Nanti dipakai');
+    });
+
+    it('membuka form edit membawa nilai branding yang tersimpan', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Sudah Dibrand',
+            'is_active' => true,
+        ]);
+        $client->forceFill([
+            'header_enabled' => true,
+            'header_text' => 'Header lama',
+            'footer_enabled' => false,
+            'footer_text' => 'Footer draft',
+        ])->save();
+
+        Livewire::actingAs($this->user)
+            ->test(ClientForm::class, ['client' => $client->fresh()])
+            ->assertSet('headerEnabled', true)
+            ->assertSet('headerText', 'Header lama')
+            ->assertSet('footerEnabled', false)
+            ->assertSet('footerText', 'Footer draft');
+    });
+
+    it('🔴 branding tidak terikat wire; form HTML biasa menangkap nilai saat Simpan', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Binding Check',
+            'is_active' => true,
+        ]);
+
+        $html = $this->actingAs($this->user)
+            ->get(route('wara.client.edit', $client))
+            ->assertOk()
+            ->getContent();
+
+        // 🔴 `wire:model` (termasuk `.live`) dan `wire:submit` terbukti tidak
+        // dikirim di sebagian deployment. Halaman ini adalah form HTML biasa
+        // (`POST`/`PUT` ke `ClientController`): reveal di klien ditangani
+        // Alpine (`x-show` + `x-on:change`), nilai baca oleh HTML sendiri saat
+        // tombol Simpan diklik.
+        expect($html)
+            ->toContain('x-show="headerEnabled"')
+            ->toContain('x-show="footerEnabled"')
+            ->toContain('id="branding-header-enable"')
+            ->toContain('id="branding-footer-enable"')
+            ->toContain('id="branding-header-text"')
+            ->toContain('id="branding-footer-text"')
+            ->toContain('x-on:change="headerEnabled = $el.checked"')
+            ->toContain('x-on:change="footerEnabled = $el.checked"')
+            ->toContain('name="headerEnabled"')
+            ->toContain('name="footerEnabled"')
+            ->toContain('name="headerText"')
+            ->toContain('name="footerText"')
+            ->toContain('method="POST"')
+            ->toContain('name="delete_endpoint"')
+            ->not->toContain('captureBranding()')
+            ->not->toContain('wire:submit')
+            ->not->toContain('wire:model="footerEnabled"')
+            ->not->toContain('wire:model="headerEnabled"')
+            ->not->toContain('wire:model.live="footerEnabled"')
+            ->not->toContain('x-model="headerEnabled"')
+            ->not->toContain('x-model="footerEnabled"');
+    });
+});
+
+describe('form edit merender nilai tersimpan di server', function () {
+    it('mengisi value/selected/checked dan konten textarea dari database', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Client Form DB',
+            'is_active' => true,
+        ]);
+        $client->forceFill([
+            'header_enabled' => true,
+            'header_text' => 'Header server',
+            'footer_enabled' => true,
+            'footer_text' => 'Footer server',
+        ])->save();
+
+        $route = new WaraRoute;
+        $route->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'notif-server',
+            'device_id' => deviceForClientUiTest('ui_srv_1')->device_id,
+        ]);
+        $route->fill([
+            'outbound_enabled' => true,
+            'inbound_webhook_enabled' => false,
+        ])->save();
+
+        $html = $this->actingAs($this->user)
+            ->get(route('wara.client.edit', $client))
+            ->assertOk()
+            ->getContent();
+
+        expect($html)
+            ->toContain('value="Client Form DB"')
+            ->toContain('value="notif-server"')
+            ->toContain('Header server')
+            ->toContain('Footer server')
+            ->toMatch('/<option value="service"[^>]*selected[^>]*>service<\/option>/')
+            ->toMatch('/<option value="ui_srv_1"[^>]*selected[^>]*>/')
+            ->toMatch('/<input type="checkbox"[^>]*checked[^>]*name="is_active"/')
+            ->toMatch('/<input type="checkbox"[^>]*checked[^>]*name="routes\[0\]\[outbound_enabled\]"/')
+            ->not->toMatch('/<input type="checkbox"[^>]*checked[^>]*name="routes\[0\]\[inbound_webhook_enabled\]"/');
+    });
+});
+
+describe('simpan lewat form HTML biasa (ClientController)', function () {
+    it('POST store menyimpan client + branding lalu redirect ke daftar', function () {
+        $this->actingAs($this->user)
+            ->from(route('wara.client.create'))
+            ->post(route('wara.client.store'), [
+                'name' => 'Client HTTP Store',
+                'type' => WaraClient::TYPE_SERVICE,
+                'is_active' => '1',
+                'headerEnabled' => '1',
+                'headerText' => 'Header via HTTP',
+                'footerEnabled' => '1',
+                'footerText' => 'Footer via HTTP',
+            ])
+            ->assertRedirect(route('wara.client.index'));
+
+        $client = WaraClient::query()->where('name', 'Client HTTP Store')->firstOrFail();
+
+        expect($client->is_active)->toBeTrue()
+            ->and($client->header_enabled)->toBeTrue()
+            ->and($client->header_text)->toBe('Header via HTTP')
+            ->and($client->footer_enabled)->toBeTrue()
+            ->and($client->footer_text)->toBe('Footer via HTTP');
+    });
+
+    it('PUT update mengubah branding client yang sudah ada', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Client HTTP Lama',
+            'is_active' => true,
+        ]);
+
+        $this->actingAs($this->user)
+            ->from(route('wara.client.edit', $client))
+            ->put(route('wara.client.update', $client), [
+                'name' => 'Client HTTP Update',
+                'type' => WaraClient::TYPE_SERVICE,
+                'headerEnabled' => '1',
+                'headerText' => 'Header baru',
+                'footerEnabled' => '0',
+                'footerText' => '',
+            ])
+            ->assertRedirect(route('wara.client.index'));
+
+        $client->refresh();
+
+        expect($client->name)->toBe('Client HTTP Update')
+            ->and($client->header_enabled)->toBeTrue()
+            ->and($client->header_text)->toBe('Header baru')
+            ->and($client->footer_enabled)->toBeFalse()
+            ->and($client->footer_text)->toBeNull();
+    });
+
+    it('header menyala tanpa teks ditolak, redirect balik, client tidak tersimpan', function () {
+        $this->actingAs($this->user)
+            ->from(route('wara.client.create'))
+            ->post(route('wara.client.store'), [
+                'name' => 'HTTP Tanpa Teks',
+                'type' => WaraClient::TYPE_SERVICE,
+                'headerEnabled' => '1',
+                'headerText' => '',
+            ])
+            ->assertRedirect(route('wara.client.create'))
+            ->assertSessionHasErrors('headerText');
+
+        expect(WaraClient::query()->where('name', 'HTTP Tanpa Teks')->exists())->toBeFalse();
+    });
+
+    it('route ikut tersimpan dari POST form biasa', function () {
+        $device = deviceForClientUiTest('ui_http_1');
+
+        $this->actingAs($this->user)
+            ->post(route('wara.client.store'), [
+                'name' => 'Client HTTP Route',
+                'type' => WaraClient::TYPE_SERVICE,
+                'routes' => [
+                    [
+                        'purpose' => 'notif-http',
+                        'device_id' => $device->device_id,
+                        'outbound_enabled' => '1',
+                        'inbound_webhook_enabled' => '',
+                    ],
+                ],
+            ])
+            ->assertRedirect(route('wara.client.index'));
+
+        $client = WaraClient::query()->where('name', 'Client HTTP Route')->firstOrFail();
+
+        expect($client->routes->count())->toBe(1)
+            ->and($client->routes->first()->purpose)->toBe('notif-http')
+            ->and($client->routes->first()->outbound_enabled)->toBeTrue()
+            ->and($client->routes->first()->inbound_webhook_enabled)->toBeFalse();
+    });
+
+    it('delete_endpoint menghapus endpoint lalu kembali ke halaman edit', function () {
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Delete Endpoint',
+            'is_active' => true,
+        ]);
+
+        $endpoint = new WaraWebhookEndpoint;
+        $endpoint->forceFill([
+            'client_id' => $client->getKey(),
+            'url' => 'https://contoh.go.id/hook',
+            'secret' => 'rahasia-asli-linux-mahir-hebat',
+        ]);
+        $endpoint->fill(['enabled' => true])->save();
+
+        $this->actingAs($this->user)
+            ->from(route('wara.client.edit', $client))
+            ->put(route('wara.client.update', $client), [
+                'delete_endpoint' => (string) $endpoint->getKey(),
+            ])
+            ->assertRedirect(route('wara.client.edit', $client));
+
+        expect(WaraWebhookEndpoint::query()->whereKey($endpoint->getKey())->exists())->toBeFalse();
+    });
+});
+
+describe('token milik client saat diedit', function () {
+    it('🔴 token yang dipakai client yang sedang diedit tetap bisa dipilih', function () {
+        $token = ApiToken::create([
+            'name' => 'Punya client ini',
+            'token' => 'hash-'.uniqid(),
+            'abilities' => ['wara.send'],
+        ]);
+
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_TOKEN,
+            'name' => 'Punya Token',
+            'is_active' => true,
+        ]);
+        $client->forceFill(['api_token_id' => $token->getKey()])->save();
+
+        $html = $this->actingAs($this->user)
+            ->get(route('wara.client.edit', $client))
+            ->assertOk()
+            ->getContent();
+
+        // 🔴 Kalau di-disabled, browser tidak mengirim nilainya saat Simpan dan
+        // validasi `required_if:type,token` gagal — menyimpan ulang client
+        // token menjadi mustahil. Pemilik diri sendiri harus AVAILABLE.
+        expect($html)
+            ->toMatch('/<option value="'.preg_quote($token->getKey(), '/').'"[^>]*selected[^>]*>/')
+            ->not->toMatch('/<option value="'.preg_quote($token->getKey(), '/').'"[^>]*disabled[^>]*>/');
     });
 });

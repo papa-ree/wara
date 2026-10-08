@@ -49,8 +49,9 @@
 
     <div class="flex-none">
         <livewire:core.shared-components.item-actions
-            :itemId="$record->getKey()"
-            editRoute="wara.client.edit"
+            :editUrl="route('wara.client.edit', $record->getKey())"
+            :deleteId="$record->getKey()"
+            deleteEvent="deleteWaraClient"
             :navigate="false"
             confirmMessage="{{ __('Client, route, dan endpoint webhook-nya ikut terhapus.') }}"
             wire:key="item-actions-card-{{ $record->getKey() }}" />
