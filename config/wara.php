@@ -198,4 +198,26 @@ return [
         'backoff' => (int) env('WARA_FANOUT_BACKOFF', 30),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Alert Slack Device Terputus (§8.3)
+    |--------------------------------------------------------------------------
+    |
+    | Kirim notifikasi ke channel Slack saat device yang tadinya siap berubah
+    | menjadi tidak siap (disconnect/connecting) atau hilang dari katalog.
+    | Pemicunya adalah `wara:poll-status` dan `wara:sync-devices`, yang
+    | memancarkan `WaraDeviceDisconnected` -> listener mengirim notifikasi.
+    |
+    | `enabled` default false supaya development tidak memanggil webhook real.
+    | `webhook_url` = URL incoming webhook Slack
+    | (https://hooks.slack.com/services/...). Nomor device hanya dikirim dalam
+    | bentuk disamarkan, lihat `Notifications/DeviceDisconnected.php`.
+    |
+    */
+
+    'slack' => [
+        'enabled' => (bool) env('WARA_SLACK_ENABLED', false),
+        'webhook_url' => env('WARA_SLACK_WEBHOOK_URL'),
+    ],
+
 ];

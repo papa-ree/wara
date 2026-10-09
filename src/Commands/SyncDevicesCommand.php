@@ -55,6 +55,8 @@ class SyncDevicesCommand extends Command
 
             $session = WaraSession::query()->firstOrNew(['device_id' => $device->sessionId]);
 
+            $previous = $session->currentState();
+
             $session->fill([
                 'jid' => $device->jid,
                 'display_name' => $device->displayName,
@@ -80,6 +82,11 @@ class SyncDevicesCommand extends Command
             // keputusan admin.
             $session->save();
 
+            // Transisi `logged_in -> tidak siap` memancarkan WaraDeviceDisconnected
+            // (alert Slack). Ditulis setelah `save()` supaya keadaan baru sudah
+            // tersimpan saat listener membaca session.
+            $wara->notifyWhenDeviceBecomesUnusable($session, $previous, $device->state);
+
             $this->line(sprintf('  + Tersimpan: %s [%s] state=%s', $label, $device->sessionId, $device->state->value));
         }
 
@@ -95,11 +102,18 @@ class SyncDevicesCommand extends Command
                 continue;
             }
 
+            $previous = $session->currentState();
+
             $session->forceFill([
                 'is_present' => false,
                 'is_connected' => false,
                 'is_logged_in' => false,
             ])->save();
+
+            // Device hilang dari katalog = tidak tersedia, sama seperti
+            // disconnected. Tetap lewat jalur yang sama supaya alert Slack
+            // (dan consumer lain) mendengar satu kontrak yang konsisten.
+            $wara->notifyWhenDeviceBecomesUnusable($session, $previous, DeviceState::Disconnected);
 
             $this->warn(sprintf('  ! Ditandai offline: %s [%s]', $session->display_name ?? '(tanpa nama)', $session->device_id));
         }

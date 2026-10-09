@@ -410,11 +410,12 @@ describe('hapus client', function () {
     it('🔴 TIDAK menghapus client yang tidak ada, dan tidak melempar error', function () {
         // 🔴 Dihitung dari SEBELUM, bukan dari angka nol.
         //
-        // Migrasi `move_otp_route_to_srikandi_client` milik package lain ikut
-        // jalan di `RefreshDatabase`, jadi `wara_clients` sudah berisi client
-        // Srikandi sejak awal. Menyebut nol akan gagal bukan karena kode salah,
-        // tapi karena ada data dari migrasi lain - dan yang terperiksa
-        // ("tidak ada yang ikut terhapus") jadi tidak terperiksa sama sekali.
+        // Migrasi `create_srikandi_clients_table` milik package lain ikut
+        // jalan di `RefreshDatabase` (bagian `normalizeWaraClient`), jadi
+        // `wara_clients` sudah berisi client Srikandi sejak awal. Menyebut nol
+        // akan gagal bukan karena kode salah, tapi karena ada data dari migrasi
+        // lain - dan yang terperiksa ("tidak ada yang ikut terhapus") jadi tidak
+        // terperiksa sama sekali.
         $before = WaraClient::query()->count();
 
         Livewire::actingAs($this->user)

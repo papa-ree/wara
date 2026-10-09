@@ -34,13 +34,14 @@ return [
 
     'title' => 'Status bale/wara',
 
-    'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13, '
-        .'dan Halaman Analitik (A1+A2) selesai 6 Okt 2026; branding pesan per client (header/footer) '
-        .'dibangun dari nol 7 Okt 2026; sisa yang tercatat adalah persiapan '
-        .'produksi dan keputusan yang masih terbuka (A3-A5). Daftar kerjanya di '
-        .'`docs/wara/TODO.md`.',
+    'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13; '
+        .'Halaman Analitik (A1+A2) selesai 6 Okt 2026; branding pesan per client (header/footer) '
+        .'dibangun dari nol 7 Okt 2026; alert Slack saat device terputus (§8.3) selesai 9 Okt 2026. '
+        .'Fase 14 (manajemen device dari UI, PRD §15) sudah direncanakan tapi belum dikerjakan. '
+        .'Sisa yang tercatat adalah persiapan produksi dan keputusan yang masih terbuka (A3-A5). '
+        .'Daftar kerjanya di `docs/wara/TODO.md`.',
 
-    'updated_at' => '2026-10-07',
+    'updated_at' => '2026-10-09',
 
     'doc' => [
         'label' => 'Dokumen',
@@ -146,6 +147,14 @@ return [
                         .'tidak ada. Device jadi read-only. Tiap package punya client sendiri; '
                         .'`srikandi:install` membuat `Srikandi (Package)`. `Kosadata` & `Wago` di-uninstall.',
                 ],
+                [
+                    'label' => 'Fase 14 — Manajemen device dari UI (PRD §15)',
+                    'status' => 'open',
+                    'meta' => 'PLAN §18',
+                    'note' => 'Rencana 9 Okt 2026: tambah slot, login QR/kode, reconnect, logout, hapus slot, '
+                        .'webhook per-device — semua dari `Wara > Device` tanpa membuka dashboard GOWA. '
+                        .'Belum ada kodenya. Keputusan #27-#32; daftar kerja di `docs/wara/TODO.md` §D.',
+                ],
             ],
         ],
 
@@ -173,6 +182,15 @@ return [
                         .'`docs/wara/TODO.md` P0 sebagai koreksi. Amber "Device perlu dipasang ulang" + abu '
                         .'"Device sedang tidak siap" sudah dirender di header Device, ambangnya '
                         .'`offline_alert_after_minutes`, dan `wara:poll-status` exit non-nol saat perlu perhatian.',
+                ],
+                [
+                    'label' => 'Alert Slack saat device terputus (§8.3)',
+                    'status' => 'done',
+                    'meta' => 'PRD §8.3, 9 Okt 2026',
+                    'note' => 'Event `WaraDeviceDisconnected` dipancarkan saat transisi `logged_in -> tidak siap` '
+                        .'(`wara:poll-status` & `wara:sync-devices`), lalu `SendDeviceDisconnectedAlert` '
+                        .'mengirim notifikasi lewat kanal `slack` (incoming webhook). JID disamarkan; duplikat '
+                        .'dicegah di sumber. No-op saat `WARA_SLACK_ENABLED=false`.',
                 ],
                 [
                     'label' => 'Pisahkan akun uji dari akun produksi',

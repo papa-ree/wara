@@ -7,6 +7,7 @@ use Bale\Wara\Data\DeviceList;
 use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Data\DeviceStatus;
 use Bale\Wara\Data\SendResult;
+use Bale\Wara\Events\WaraDeviceDisconnected;
 use Bale\Wara\Events\WaraMessageSent;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\DeviceNotReadyException;
@@ -314,9 +315,17 @@ class WaraManager
 
     /**
      * Status device (§8.3) — dipanggil scheduler, bukan hanya saat sync.
+     *
+     * Transisi `logged_in -> tidak siap` memancarkan `WaraDeviceDisconnected`
+     * (alert Slack di listener). Keadaan lama ditangkap SEBELUM baris ditulis:
+     * begitu `is_logged_in` false tersimpan, poll berikutnya membaca keadaan
+     * lama yang sudah tidak *usable* dan tidak memancarkan event lagi —
+     * penangkal duplikat ini berlaku lintas jalur (poll, sync, orphan).
      */
     public function pollDeviceStatus(WaraSession $session): DeviceStatus
     {
+        $previous = $session->currentState();
+
         $status = $this->gateway->deviceStatus($session->device_id);
 
         // Status endpoint tidak selalu menyertakan `jid`, jadi kelayakan di sini
@@ -329,7 +338,30 @@ class WaraManager
             'last_seen_at' => now(),
         ])->save();
 
+        $this->notifyWhenDeviceBecomesUnusable($session, $previous, $status->state);
+
         return $status;
+    }
+
+    /**
+     * Pancarkan `WaraDeviceDisconnected` hanya pada transisi nyata: device yang
+     * tadinya *usable* (`logged_in`) berubah menjadi tidak *usable*.
+     *
+     * Alasan diarahkan ke *usable*, bukan `needsAttention()`: keadaan
+     * `connected` (terhubung tapi belum login) juga berarti device tidak bisa
+     * mengirim pesan, dan operator harus tahu begitu itu terjadi — bukan hanya
+     * saat `disconnected`/`connecting`.
+     */
+    public function notifyWhenDeviceBecomesUnusable(WaraSession $session, DeviceState $previous, DeviceState $current): void
+    {
+        if ($previous->isUsable() && ! $current->isUsable()) {
+            WaraDeviceDisconnected::dispatch(
+                session: $session,
+                state: $current,
+                previous: $previous,
+                detectedAt: now(),
+            );
+        }
     }
 
     /**

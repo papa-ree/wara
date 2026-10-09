@@ -2,18 +2,22 @@
 
 namespace Bale\Wara;
 
+use Bale\Wara\Channels\SlackChannel;
 use Bale\Wara\Channels\WaraChannel;
 use Bale\Wara\Commands\InstallCommand;
 use Bale\Wara\Commands\PollDeviceStatusCommand;
 use Bale\Wara\Commands\PublishMigrationCommand;
 use Bale\Wara\Commands\SyncDevicesCommand;
 use Bale\Wara\Contracts\WaraGateway;
+use Bale\Wara\Events\WaraDeviceDisconnected;
 use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Gateways\GowaGateway;
+use Bale\Wara\Listeners\SendDeviceDisconnectedAlert;
 use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\Support\PhoneNumber;
 use Bale\Wara\Support\SendPacer;
 use Illuminate\Notifications\ChannelManager;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
@@ -43,14 +47,20 @@ class WaraServiceProvider extends ServiceProvider
             $app->make(DeviceRouter::class),
         ));
 
-        // Kanal notifikasi Laravel (PRD §13). Dibuat lewat container supaya
+        // Kanal notifikasi "wara" (PRD §13). Dibuat lewat container supaya
         // `WaraManager` yang di-inject channel adalah instance yang sama
         // dengan yang dipakai package lain.
-        //
-        // `extend()` diwarisi dari `Illuminate\Support\Manager`.
         $this->app->make(ChannelManager::class)->extend(
             'wara',
             fn ($app) => $app->make(WaraChannel::class)
+        );
+
+        // Kanal notifikasi Slack (§8.3): alert device terputus lewat incoming
+        // webhook. Dipisah dari `wara` karena tujuannya bukan mengirim pesan
+        // WhatsApp, tapi memberi tahu operator di Slack.
+        $this->app->make(ChannelManager::class)->extend(
+            'slack',
+            fn ($app) => $app->make(SlackChannel::class)
         );
 
         $this->commands([
@@ -65,6 +75,8 @@ class WaraServiceProvider extends ServiceProvider
     {
         $this->validateConfig();
 
+        $this->registerEventListeners();
+
         $this->loadViews();
         $this->app->booted(function () {
             $this->loadRoutesFrom(__DIR__.'/../routes/web.php');
@@ -75,6 +87,21 @@ class WaraServiceProvider extends ServiceProvider
         $this->scheduleJobs();
         $this->registerLivewireComponents();
         $this->registerApiScopes();
+    }
+
+    /**
+     * Listener event domain package.
+     *
+     * `WaraDeviceDisconnected` dideteksi di `WaraManager::pollDeviceStatus()`
+     * dan `SyncDevicesCommand` (§8.3), lalu disiarkan di sini supaya package
+     * lain bisa ikut bereaksi. Listener bawaan mengirim alert Slack.
+     */
+    protected function registerEventListeners(): void
+    {
+        Event::listen(
+            WaraDeviceDisconnected::class,
+            SendDeviceDisconnectedAlert::class
+        );
     }
 
     /**
