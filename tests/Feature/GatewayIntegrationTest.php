@@ -292,6 +292,38 @@ describe('wara:sync-devices (PRD §7.1)', function () {
             ->and($route->fresh()->device_id)->toBe('org_lama');
     });
 
+    it('device tanpa route yang hilang dari gateway langsung dihapus', function () {
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_hantu', 'jid' => '6287@s.whatsapp.net']);
+
+        Http::fake(['gateway.test/*' => Http::response([
+            'data' => [
+                ['device_id' => 'org_baru', 'jid' => '6286@s.whatsapp.net', 'state' => 'logged_in'],
+            ],
+        ], 200)]);
+
+        $this->artisan('wara:sync-devices')->assertSuccessful();
+
+        // Ghost tanpa route = tidak ada keputusan admin yang hilang, jadi
+        // dibersihkan. Device yang masih dipakai route adalah tanggung jawab
+        // test "device yang hilang ditandai offline".
+        expect(WaraSession::query()->where('device_id', 'org_hantu')->exists())->toBeFalse()
+            ->and(WaraSession::query()->count())->toBe(1);
+    });
+
+    it('dry-run melaporkan rencana hapus tanpa menulis database', function () {
+        makeSessionGatewayIntegrationTest(['device_id' => 'org_hantu', 'jid' => '6287@s.whatsapp.net']);
+
+        Http::fake(['gateway.test/*' => Http::response([
+            'data' => [
+                ['device_id' => 'org_baru', 'jid' => '6286@s.whatsapp.net', 'state' => 'logged_in'],
+            ],
+        ], 200)]);
+
+        $this->artisan('wara:sync-devices', ['--dry-run' => true])->assertSuccessful();
+
+        expect(WaraSession::query()->where('device_id', 'org_hantu')->exists())->toBeTrue();
+    });
+
     it('sync tidak pernah menimpa route milik client', function () {
         $session = makeSessionGatewayIntegrationTest(['device_id' => 'org_2', 'jid' => '6285126061182@s.whatsapp.net', 'display_name' => 'nama lama']);
         $client = makeClientGatewayIntegrationTest();

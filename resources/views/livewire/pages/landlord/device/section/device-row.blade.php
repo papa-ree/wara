@@ -89,6 +89,12 @@
     <td class="px-4 py-3.5 whitespace-nowrap w-px">
         <livewire:core.shared-components.item-actions
             :editUrl="route('wara.device.edit', $record->getKey())"
+            :deleteId="$record->is_present ? null : $record->getKey()"
+            deleteEvent="deleteWaraDevice"
+            :modelName="__('Device')"
+            :confirmMessage="$deviceRoutes->isNotEmpty()
+                ? __('Yakin ingin menghapus? :routes route yang menunjuk device ini ikut terhapus.', ['routes' => $deviceRoutes->count()])
+                : __('Yakin ingin menghapus?')"
             :navigate="true"
             wire:key="item-actions-{{ $record->getKey() }}" />
     </td>

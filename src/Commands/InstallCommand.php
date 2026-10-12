@@ -19,6 +19,7 @@ class InstallCommand extends Command
         $permissions = [
             'wara.device.read' => 'Membaca katalog device WhatsApp.',
             'wara.device.update' => 'Menguji koneksi dan menyegarkan status device WhatsApp.',
+            'wara.device.delete' => 'Menghapus device ghost (offline) beserta route yang menunjuknya.',
             'wara.client.read' => 'Membaca daftar client Wara dan peta purpose ke device.',
             'wara.client.update' => 'Membuat client, memetakan purpose ke device, dan mengelola endpoint webhook.',
             'wara.client.delete' => 'Menghapus client beserta route dan endpoint webhook-nya.',

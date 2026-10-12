@@ -3,6 +3,8 @@
 use Bale\Wara\Channels\SlackChannel;
 use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Events\WaraDeviceDisconnected;
+use Bale\Wara\Models\WaraClient;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -214,10 +216,16 @@ describe('alert saat device terputus (wara:poll-status)', function () {
 });
 
 describe('alert saat device hilang dari katalog (wara:sync-devices)', function () {
-    it('device yang hilang ditandai offline dan memicu alert "hilang dari gateway"', function () {
+    it('device berroute yang hilang ditandai offline dan memicu alert "hilang dari gateway"', function () {
         config()->set('wara.slack.enabled', true);
 
         makeSlackDevice(['device_id' => 'org_lama']);
+
+        $client = new WaraClient;
+        $client->forceFill(['type' => 'service', 'name' => 'Client lama', 'is_active' => true])->save();
+
+        $route = new WaraRoute;
+        $route->forceFill(['client_id' => $client->getKey(), 'purpose' => 'otp', 'device_id' => 'org_lama'])->save();
 
         Http::fake([
             'gateway.test/*' => Http::response(['data' => [
@@ -230,7 +238,9 @@ describe('alert saat device hilang dari katalog (wara:sync-devices)', function (
 
         $orphan = WaraSession::query()->where('device_id', 'org_lama')->first();
 
-        expect($orphan->is_present)->toBeFalse();
+        expect($orphan->is_present)->toBeFalse()
+            // Route milik client dipertahankan selama device masih terpakai.
+            ->and($route->fresh()->device_id)->toBe('org_lama');
 
         expect(slackAlertCount())->toBe(1);
 
@@ -238,6 +248,28 @@ describe('alert saat device hilang dari katalog (wara:sync-devices)', function (
 
         expect($body)->toContain('hilang dari gateway')
             ->and($body)->toContain('org_lama');
+    });
+
+    it('device tanpa route yang hilang dihapus tanpa alert', function () {
+        config()->set('wara.slack.enabled', true);
+
+        makeSlackDevice(['device_id' => 'org_hantu']);
+
+        Http::fake([
+            'gateway.test/*' => Http::response(['data' => [
+                ['device_id' => 'org_baru', 'jid' => '6280088@s.whatsapp.net', 'display_name' => 'Device Baru', 'state' => 'logged_in'],
+            ]], 200),
+            'hooks.slack.com/*' => Http::response('ok', 200),
+        ]);
+
+        $this->artisan('wara:sync-devices')->assertSuccessful();
+
+        // Ghost tanpa route = tidak ada keputusan admin yang hilang, jadi
+        // langsung dibersihkan — dan karena tidak menyinggung operasional,
+        // tidak perlu mengganggu siapa pun lewat alert.
+        expect(WaraSession::query()->where('device_id', 'org_hantu')->exists())->toBeFalse();
+
+        expect(slackAlertCount())->toBe(0);
     });
 
     it('device sehat yang tetap tampil di katalog tidak memicu alert', function () {

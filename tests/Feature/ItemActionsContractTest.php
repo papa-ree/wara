@@ -79,9 +79,10 @@ it('baris Client harus merender link edit dan aksi hapus', function () {
 });
 
 it('device-row dan client-row konsisten memakai pola prop yang sama', function () {
-    // Dua row harus memanggil component dengan kontrak yang sama. Device
-    // sengaja TIDAK bisa dihapus (desain), jadi hanya client yang mengirim
-    // `deleteId`.
+    // Kedua row memakai kontrak yang sama. Device mengirim `deleteId` dengan
+    // nilai kondisional - hanya device offline (ghost) yang menampilkan aksi
+    // hapus - dan event khusus `deleteWaraDevice`, bukan `deleteItem` bawaan
+    // data-table.
     $clientRow = file_get_contents(dirname(__DIR__, 2)
         .'/resources/views/livewire/pages/landlord/client/section/client-row.blade.php');
 
@@ -95,5 +96,7 @@ it('device-row dan client-row konsisten memakai pola prop yang sama', function (
         ->and($clientRow)->not->toContain(':itemId=')
         ->and($clientRow)->not->toContain('deleteEvent="deleteItem"')
         ->and($deviceRow)->toContain(':editUrl=')
-        ->and($deviceRow)->not->toContain(':deleteId=');
+        ->and($deviceRow)->toContain(':deleteId=')
+        ->and($deviceRow)->toContain('deleteEvent="deleteWaraDevice"')
+        ->and($deviceRow)->not->toContain('deleteEvent="deleteItem"');
 });

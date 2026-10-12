@@ -372,6 +372,149 @@ class WaraManager
         return $this->gateway->listDevices();
     }
 
+    /**
+     * Sinkronkan katalog device dari gateway ke `wara_sessions` (PRD §7.1).
+     *
+     * SATU-SATUNYA sumber sinkron: perintah `wara:sync-devices` dan tombol
+     * "Sinkronkan Sekarang" di halaman Device sama-sama memanggil method ini.
+     *
+     * 🔴 Dulu tombol halaman hanya memanggil `listDevices()` (baca saja),
+     * jadi device baru dari gateway TIDAK PERNAH tersimpan — sinkron terlihat
+     * berhasil (katalog terbaca) padahal database tidak berubah. Devian itu
+     * yang diperbaiki di sini: logika sinkron diangkat dari `SyncDevicesCommand`
+     * ke method ini.
+     *
+     * 🔴 Device yang hilang dari gateway DIPERLAKUKAN DUA CARA, dan bedanya
+     * yang penting:
+     *
+     * - Masih dipakai `wara_routes` → ditandai `is_present = false`, TIDAK
+     *   dihapus. Menghapus baris akan diam-diam membuang keputusan admin yang
+     *   tersimpan di `wara_routes` (`client_id` + `purpose`) dan menyembunyikan
+     *   fakta bahwa routing-nya kini menunjuk device yang tak ada.
+     * - Tidak dipakai route mana pun → DIHAPUS. Tidak ada keputusan admin yang
+     *   hilang, dan membiarkannya berarti ghost device terus menumpuk di
+     *   halaman Device setelah admin membersihkannya di GOWA.
+     *
+     * 🔴 Gateway melaporkan NOL device = jangan ubah apa pun. Kalau nol
+     * diartikan "semua hilang", daftar yang kebetulan kosong menghapus/menandai
+     * SEMUA device dalam satu sinkron.
+     *
+     * @param  bool  $dryRun  kembalikan rencana tanpa menulis database
+     * @return array{
+     *     total: int,
+     *     skipped: int,
+     *     saved: list<array{device_id: string, display_name: string|null, state: DeviceState}>,
+     *     orphaned: list<array{device_id: string, display_name: string|null}>,
+     *     deleted: list<array{device_id: string, display_name: string|null}>
+     * }
+     *
+     * @throws WaraException ketidakmampuan menghubungi gateway → pemanggil
+     *                       memutuskan: command gagal, Livewire tampilkan toast
+     */
+    public function syncDevices(bool $dryRun = false): array
+    {
+        $devices = $this->listDevices();
+
+        if ($devices->count() === 0) {
+            return ['total' => 0, 'skipped' => 0, 'saved' => [], 'orphaned' => [], 'deleted' => []];
+        }
+
+        $result = [
+            'total' => $devices->count(),
+            'skipped' => 0,
+            'saved' => [],
+            'orphaned' => [],
+            'deleted' => [],
+        ];
+
+        $seen = [];
+
+        foreach ($devices as $device) {
+            if ($device->sessionId === '') {
+                $result['skipped']++;
+
+                continue;
+            }
+
+            $seen[] = $device->sessionId;
+
+            $session = WaraSession::query()->firstOrNew(['device_id' => $device->sessionId]);
+
+            $previous = $session->currentState();
+
+            $session->fill([
+                'jid' => $device->jid,
+                'display_name' => $device->displayName,
+                'is_present' => true,
+                'is_connected' => $device->state !== DeviceState::Disconnected,
+                'is_logged_in' => $device->state->isUsable(),
+                'last_seen_at' => now(),
+            ]);
+
+            if (! $dryRun) {
+                $session->save();
+
+                // Transisi `logged_in -> tidak siap` memancarkan
+                // WaraDeviceDisconnected (alert Slack). Ditulis setelah
+                // `save()` supaya keadaan baru sudah tersimpan saat listener
+                // membaca session.
+                $this->notifyWhenDeviceBecomesUnusable($session, $previous, $device->state);
+            }
+
+            $result['saved'][] = [
+                'device_id' => $device->sessionId,
+                'display_name' => $device->displayName,
+                'state' => $device->state,
+            ];
+        }
+
+        $orphaned = WaraSession::query()
+            ->whereNotIn('device_id', $seen)
+            ->where('is_present', true)
+            ->get();
+
+        foreach ($orphaned as $session) {
+            // Route yang menunjuk device ini = keputusan admin. Kehadirannya
+            // mengubah perlakuan: device yang masih terpakai disimpan (offline),
+            // yang tak terpakai dihapus. `wara_routes.device_id` tidak punya FK
+            // ke `wara_sessions`, jadi menghapus hanya aman selama tak ada route.
+            $hasRoutes = $session->routes()->exists();
+
+            if (! $dryRun && ! $hasRoutes) {
+                $session->delete();
+
+                $result['deleted'][] = [
+                    'device_id' => $session->device_id,
+                    'display_name' => $session->display_name,
+                ];
+
+                continue;
+            }
+
+            if (! $dryRun) {
+                $previous = $session->currentState();
+
+                $session->forceFill([
+                    'is_present' => false,
+                    'is_connected' => false,
+                    'is_logged_in' => false,
+                ])->save();
+
+                // Device hilang dari katalog = tidak tersedia, sama seperti
+                // disconnected. Tetap lewat jalur yang sama supaya alert Slack
+                // (dan consumer lain) mendengar satu kontrak yang konsisten.
+                $this->notifyWhenDeviceBecomesUnusable($session, $previous, DeviceState::Disconnected);
+            }
+
+            $result['orphaned'][] = [
+                'device_id' => $session->device_id,
+                'display_name' => $session->display_name,
+            ];
+        }
+
+        return $result;
+    }
+
     public function gateway(): WaraGateway
     {
         return $this->gateway;

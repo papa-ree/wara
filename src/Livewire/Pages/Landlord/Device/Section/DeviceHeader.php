@@ -26,20 +26,36 @@ class DeviceHeader extends Component
         return (int) round((int) config('wara.session_window_seconds', 900) / 60);
     }
 
+    /**
+     * Tombol "Sinkronkan Sekarang".
+     *
+     * 🔴 HARUS memanggil `syncDevices()`, BUKAN `listDevices()`.
+     *
+     * `listDevices()` hanya membaca katalog dari gateway; tanpa menulis ke
+     * `wara_sessions`, device baru tidak akan pernah muncul di tabel — sinkron
+     * tampaknya berhasil padahal database tidak berubah. `syncDevices()` adalah
+     * method yang sama yang dipakai command `wara:sync-devices`, jadi perilaku
+     * tombol dan command tidak boleh menyimpang.
+     */
     public function syncNow(WaraManager $wara): void
     {
         try {
-            $devices = $wara->listDevices();
+            $result = $wara->syncDevices();
         } catch (WaraException $e) {
             $this->dispatch('toast', message: $e->getMessage(), type: 'error');
 
             return;
         }
 
-        $this->dispatch('toast', type: 'success', message: __(
-            'Sinkronisasi selesai. :count device dilaporkan gateway.',
-            ['count' => $devices->count()],
-        ));
+        $message = $result['total'] === 0
+            ? __('Gateway tidak melaporkan device apa pun.')
+            : __('Sinkronisasi selesai. :total device diproses, :deleted dihapus, :orphaned ditandai offline.', [
+                'total' => $result['total'],
+                'deleted' => count($result['deleted']),
+                'orphaned' => count($result['orphaned']),
+            ]);
+
+        $this->dispatch('toast', type: 'success', message: $message);
 
         $this->dispatch('refresh-device-table');
     }

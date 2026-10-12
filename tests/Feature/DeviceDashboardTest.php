@@ -3,6 +3,8 @@
 use App\Models\User;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Form as DeviceForm;
 use Bale\Wara\Livewire\Pages\Landlord\Device\Index as DeviceIndex;
+use Bale\Wara\Livewire\Pages\Landlord\Device\Section\DeviceHeader;
+use Bale\Wara\Livewire\Pages\Landlord\Device\Section\DeviceTable;
 use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
@@ -10,6 +12,7 @@ use Bale\Wara\WaraServiceProvider;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Permission;
@@ -303,5 +306,199 @@ describe('warna status', function () {
 
         expect($session->state_color)->toBe('gray')
             ->and($session->state_label)->toBe('Tidak ada di gateway');
+    });
+});
+
+describe('tombol Sinkronkan Sekarang', function () {
+    beforeEach(function () {
+        Permission::create(['name' => 'wara.device.read']);
+        $this->user->givePermissionTo('wara.device.read');
+
+        config()->set('wara.endpoint', 'http://gateway.test');
+        config()->set('wara.api_key', 'user:pass');
+        config()->set('wara.slack.enabled', false);
+    });
+
+    it('🔴 device baru dari gateway TERSIMPAN, bukan hanya ditampilkan', function () {
+        // Dulu tombol ini cuma memanggil `listDevices()` — katalog terbaca,
+        // toast sukses, tapi wara_sessions tidak berubah. Test ini memastikan
+        // tombol memakai `syncDevices()` yang sama dengan `wara:sync-devices`.
+        Http::fake(['gateway.test/*' => Http::response([
+            'data' => [
+                ['device_id' => 'org_baru', 'jid' => '6285126061199@s.whatsapp.net', 'display_name' => 'wago baru', 'state' => 'logged_in'],
+            ],
+        ], 200)]);
+
+        Livewire::test(DeviceHeader::class)
+            ->call('syncNow')
+            ->assertDispatched('toast')
+            ->assertDispatched('refresh-device-table');
+
+        $saved = WaraSession::query()->where('device_id', 'org_baru')->first();
+
+        expect($saved)->not->toBeNull()
+            ->and($saved->display_name)->toBe('wago baru')
+            ->and($saved->is_present)->toBeTrue()
+            ->and($saved->is_logged_in)->toBeTrue()
+            ->and($saved->fresh()->last_seen_at)->not->toBeNull();
+    });
+
+    it('device berroute yang hilang ditandai offline oleh tombol, BUKAN dihapus', function () {
+        $lama = makeSessionDeviceDashboardTest(['device_id' => 'org_lama', 'jid' => '6286@s.whatsapp.net']);
+        $client = makeClientDeviceDashboardTest();
+        $route = new WaraRoute;
+        $route->forceFill(['client_id' => $client->getKey(), 'purpose' => 'otp', 'device_id' => 'org_lama'])->save();
+
+        Http::fake(['gateway.test/*' => Http::response([
+            'data' => [
+                ['device_id' => 'org_baru', 'jid' => '6287@s.whatsapp.net', 'state' => 'logged_in'],
+            ],
+        ], 200)]);
+
+        Livewire::test(DeviceHeader::class)->call('syncNow');
+
+        $lama->refresh();
+
+        expect(WaraSession::query()->count())->toBe(2)
+            ->and($lama->is_present)->toBeFalse()
+            ->and($lama->is_logged_in)->toBeFalse()
+            // Route milik client dipertahankan walau device-nya offline.
+            ->and($route->fresh()->device_id)->toBe('org_lama');
+    });
+
+    it('device tanpa route yang hilang dari gateway dibersihkan oleh tombol', function () {
+        makeSessionDeviceDashboardTest(['device_id' => 'org_hantu', 'jid' => '6286@s.whatsapp.net']);
+
+        Http::fake(['gateway.test/*' => Http::response([
+            'data' => [
+                ['device_id' => 'org_baru', 'jid' => '6287@s.whatsapp.net', 'state' => 'logged_in'],
+            ],
+        ], 200)]);
+
+        Livewire::test(DeviceHeader::class)->call('syncNow');
+
+        // Ghost tanpa route tidak menyimpan keputusan admin apa pun — sinkron
+        // berikutnya wajib membersihkannya, sama seperti `wara:sync-devices`.
+        expect(WaraSession::query()->where('device_id', 'org_hantu')->exists())->toBeFalse()
+            ->and(WaraSession::query()->count())->toBe(1);
+    });
+
+    it('gateway melaporkan nol device: tombol tidak menandai semua device offline', function () {
+        makeSessionDeviceDashboardTest(['device_id' => 'org_2']);
+
+        Http::fake(['gateway.test/*' => Http::response(['data' => []], 200)]);
+
+        Livewire::test(DeviceHeader::class)->call('syncNow');
+
+        expect(WaraSession::query()->first()->is_present)->toBeTrue();
+    });
+
+    it('gateway tidak dapat dihubungi: tombol menampilkan toast error dan data lama utuh', function () {
+        $session = makeSessionDeviceDashboardTest(['device_id' => 'org_2']);
+
+        Http::fake(['gateway.test/*' => Http::response('gateway down', 503)]);
+
+        Livewire::test(DeviceHeader::class)
+            ->call('syncNow')
+            ->assertDispatched('toast')
+            ->assertNotDispatched('refresh-device-table');
+
+        expect($session->fresh()->is_present)->toBeTrue();
+    });
+
+    it('tombol dan command wara:sync-devices memakai jalur sinkron yang sama', function () {
+        // 🔴 Regresi: kalau tombol nanti "diperindah" dengan katalog langsung
+        // dari gateway tapi command tetap jalan sendiri, keduanya bisa bercabang
+        // lagi seperti bug aslinya. Satu rentetan fake harus menghasilkan
+        // database yang identik lewat dua pintu.
+        Http::fake(['gateway.test/*' => Http::response([
+            'data' => [
+                ['device_id' => 'org_a', 'jid' => '6285126061101@s.whatsapp.net', 'display_name' => 'Device A', 'state' => 'logged_in'],
+                ['device_id' => 'org_b', 'jid' => '6285126061102@s.whatsapp.net', 'display_name' => 'Device B', 'state' => 'connected'],
+            ],
+        ], 200)]);
+
+        $this->artisan('wara:sync-devices')->assertSuccessful();
+
+        $viaCommand = WaraSession::query()->orderBy('device_id')->get()->map(fn ($s) => [
+            'device_id' => $s->device_id,
+            'display_name' => $s->display_name,
+            'is_present' => $s->is_present,
+        ])->all();
+
+        foreach ($viaCommand as $row) {
+            WaraSession::query()->where('device_id', $row['device_id'])->delete();
+        }
+
+        Livewire::test(DeviceHeader::class)->call('syncNow');
+
+        $viaButton = WaraSession::query()->orderBy('device_id')->get()->map(fn ($s) => [
+            'device_id' => $s->device_id,
+            'display_name' => $s->display_name,
+            'is_present' => $s->is_present,
+        ])->all();
+
+        expect($viaButton)->toBe($viaCommand);
+    });
+});
+
+describe('hapus device manual (ghost)', function () {
+    beforeEach(function () {
+        Permission::create(['name' => 'wara.device.read']);
+        Permission::create(['name' => 'wara.device.delete']);
+        $this->user->givePermissionTo('wara.device.read', 'wara.device.delete');
+    });
+
+    it('menolak hapus tanpa permission wara.device.delete', function () {
+        $this->user->revokePermissionTo('wara.device.delete');
+
+        $ghost = makeSessionDeviceDashboardTest(['device_id' => 'org_ghost', 'is_present' => false, 'is_connected' => false, 'is_logged_in' => false]);
+
+        Livewire::test(DeviceTable::class)
+            ->call('deleteWaraDevice', $ghost->getKey())
+            ->assertForbidden();
+
+        expect(WaraSession::query()->find($ghost->getKey()))->not->toBeNull();
+    });
+
+    it('menolak menghapus device yang masih ada di gateway', function () {
+        $live = makeSessionDeviceDashboardTest(['device_id' => 'org_live']);
+
+        Livewire::test(DeviceTable::class)
+            ->call('deleteWaraDevice', $live->getKey())
+            ->assertDispatched('toast', type: 'error');
+
+        expect(WaraSession::query()->find($live->getKey()))->not->toBeNull();
+    });
+
+    it('menghapus device offline tanpa route', function () {
+        $ghost = makeSessionDeviceDashboardTest(['device_id' => 'org_ghost', 'is_present' => false, 'is_connected' => false, 'is_logged_in' => false]);
+
+        Livewire::test(DeviceTable::class)
+            ->call('deleteWaraDevice', $ghost->getKey())
+            ->assertDispatched('toast', type: 'success')
+            ->assertDispatched('refresh-device-table');
+
+        expect(WaraSession::query()->find($ghost->getKey()))->toBeNull();
+    });
+
+    it('menghapus device offline menggugurkan route yang menunjuknya', function () {
+        $ghost = makeSessionDeviceDashboardTest(['device_id' => 'org_ghost', 'is_present' => false, 'is_connected' => false, 'is_logged_in' => false]);
+        $client = makeClientDeviceDashboardTest();
+        $route = new WaraRoute;
+        $route->forceFill(['client_id' => $client->getKey(), 'purpose' => 'otp', 'device_id' => 'org_ghost'])->save();
+
+        Livewire::test(DeviceTable::class)
+            ->call('deleteWaraDevice', $ghost->getKey())
+            ->assertDispatched('toast', type: 'success');
+
+        expect(WaraSession::query()->find($ghost->getKey()))->toBeNull()
+            ->and($route->fresh())->toBeNull();
+    });
+
+    it('device yang tidak ditemukan memunculkan toast error', function () {
+        Livewire::test(DeviceTable::class)
+            ->call('deleteWaraDevice', 999999)
+            ->assertDispatched('toast', type: 'error');
     });
 });
