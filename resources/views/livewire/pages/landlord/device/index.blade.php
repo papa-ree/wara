@@ -6,6 +6,12 @@
     <div class="mt-6">
         <livewire:wara.pages.landlord.device.section.device-header />
 
+        @can('wara.device.manage')
+            <div class="mt-8">
+                <livewire:wara.pages.landlord.device.section.device-create />
+            </div>
+        @endcan
+
         <div class="mt-8">
             <livewire:wara.pages.landlord.device.section.device-table />
         </div>

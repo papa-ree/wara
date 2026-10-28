@@ -10,12 +10,12 @@
         <div class="flex items-center gap-3">
             <div @class([
                 'size-9 rounded-lg flex items-center justify-center shrink-0 border',
-                'bg-indigo-50 border-indigo-200/50 dark:bg-indigo-900/20 dark:border-indigo-700/30' => $record->direction === 'out',
+                'bg-teal-50 border-teal-200/50 dark:bg-teal-900/20 dark:border-teal-700/30' => $record->direction === 'out',
                 'bg-sky-50 border-sky-200/50 dark:bg-sky-900/20 dark:border-sky-700/30' => $record->direction === 'in',
             ])>
                 <x-lucide-message-square @class([
                     'size-4',
-                    'text-indigo-600 dark:text-indigo-400' => $record->direction === 'out',
+                    'text-teal-600 dark:text-teal-400' => $record->direction === 'out',
                     'text-sky-600 dark:text-sky-400' => $record->direction === 'in',
                 ]) />
             </div>
@@ -78,7 +78,7 @@
     <td class="px-4 py-3.5 hidden sm:table-cell">
         <span @class([
             'inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium',
-            'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400' => $record->direction === 'out',
+            'bg-teal-50 text-teal-700 dark:bg-teal-900/20 dark:text-teal-400' => $record->direction === 'out',
             'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400' => $record->direction === 'in',
         ])>
             {{ $record->direction === 'out' ? __('Keluar') : __('Masuk') }}
@@ -89,8 +89,8 @@
     <td class="px-4 py-3.5 hidden md:table-cell">
         <span @class([
             'inline-flex items-center gap-x-1.5 py-1.5 px-3 rounded-full text-xs font-medium ring-1 ring-inset',
-            'bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/30 dark:text-green-400' => in_array($record->status_color, ['green', 'blue', 'indigo'], true),
-            'bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-900/30 dark:text-red-400' => $record->status_color === 'red',
+            'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-900/30 dark:text-emerald-400' => in_array($record->status_color, ['green', 'blue', 'indigo', 'teal'], true),
+            'bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-900/30 dark:text-rose-400' => $record->status_color === 'red',
             'bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-800/50 dark:text-gray-400' => $record->status_color === 'gray',
         ])>
             <span class="size-1.5 rounded-full bg-current opacity-70"></span>

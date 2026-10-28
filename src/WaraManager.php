@@ -12,11 +12,14 @@ use Bale\Wara\Events\WaraMessageSent;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\DeviceNotReadyException;
 use Bale\Wara\Exceptions\GatewayException;
+use Bale\Wara\Exceptions\TemplateWorkflowException;
 use Bale\Wara\Exceptions\TooManyAttemptsException;
 use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraSession;
+use Bale\Wara\Models\WaraTemplate;
+use Bale\Wara\Services\TemplateRenderer;
 use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\Support\PhoneNumber;
 use Bale\Wara\Support\SendPacer;
@@ -35,6 +38,7 @@ class WaraManager
         protected PhoneNumber $phone,
         protected SendPacer $pacer,
         protected DeviceRouter $router,
+        protected TemplateRenderer $templates,
     ) {}
 
     /**
@@ -73,9 +77,10 @@ class WaraManager
         $this->guardDeviceBackoff($session);
         $this->guardSessionAttempts($normalized, $sessionKey, $session);
 
-        // Cooldown MENAHAN, bukan menolak (PRD §8.2): pemanggil adalah scraper
-        // login yang tidak punya mekanisme backoff sendiri. Menolak dengan
-        // exception hanya memindahkan masalah ke sana.
+        // Cooldown MENAHAN sampai batas aman, lalu melempar
+        // `CooldownException` (PRD §8.2). Menunggu penuh 61 detik tidak
+        // mungkin: `max_execution_time` request HTTP adalah 60 detik, jadi
+        // pemanggillah yang harus menunggu lewat 429 + `Retry-After`.
         $this->pacer->waitForPhoneCooldown($normalized);
 
         $attempt = $sessionKey !== null ? $this->pacer->recordAttempt($sessionKey) : null;
@@ -150,6 +155,88 @@ class WaraManager
             null,
             $client
         );
+    }
+
+    /**
+     * Kirim pesan dari template APPROVED (PRD §16.6).
+     *
+     * Hanya template `APPROVED` yang boleh lewat. Pemeriksaan ada di sini,
+     * bukan hanya di UI, supaya pemanggil API tidak bisa memakai draft.
+     *
+     * @param  array<string|int, string>  $parameters
+     * @param  string|null  $headerMediaUrl  wajib bila header template media
+     *
+     * @throws TemplateWorkflowException
+     * @throws WaraException
+     */
+    public function sendTemplate(
+        string $phone,
+        WaraTemplate $template,
+        array $parameters = [],
+        ?string $headerMediaUrl = null,
+        ?string $purpose = null,
+        ?string $deviceId = null,
+        ?string $sessionKey = null,
+        ?WaraClient $client = null,
+    ): SendResult {
+        if (! $template->isApproved()) {
+            throw TemplateWorkflowException::notApproved($template->status->value);
+        }
+
+        $rendered = $this->templates->render($template, $parameters, $headerMediaUrl);
+
+        $normalized = $this->phone->toInternational($phone);
+
+        if ($normalized === '') {
+            throw WaraException::misconfigured('nomor tujuan', 'nomor telepon valid', $phone);
+        }
+
+        $session = $this->resolveDevice($purpose, $deviceId, $client);
+
+        $this->guardDeviceBackoff($session);
+        $this->guardSessionAttempts($normalized, $sessionKey, $session);
+        $this->pacer->waitForPhoneCooldown($normalized);
+
+        $attempt = $sessionKey !== null ? $this->pacer->recordAttempt($sessionKey) : null;
+
+        $startedAt = microtime(true);
+
+        $finalText = $this->applyClientBranding($client, $rendered['text']);
+
+        try {
+            $result = match ($rendered['media']['type'] ?? null) {
+                'IMAGE' => $this->gateway->sendImage($session->device_id, $normalized, $rendered['media']['url'], $finalText),
+                'VIDEO' => $this->gateway->sendVideo($session->device_id, $normalized, $rendered['media']['url'], $finalText),
+                'DOCUMENT' => $this->gateway->sendDocument($session->device_id, $normalized, $rendered['media']['url'], $finalText),
+                default => $this->gateway->sendText($session->device_id, $normalized, $finalText),
+            };
+        } catch (GatewayException $e) {
+            $this->markDeviceBackoff($session);
+
+            $this->recordOutgoing($session, $normalized, $finalText, $sessionKey, $attempt, SendResult::rejected(
+                'GATEWAY_ERROR',
+                $e->getMessage()
+            ), $client, null);
+
+            throw $e;
+        }
+
+        $this->pacer->recordSend($normalized, $attempt);
+        $this->pacer->clearDeviceBackoff($session->device_id);
+
+        $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+        $this->recordOutgoing($session, $normalized, $finalText, $sessionKey, $attempt, $result, $client, $latencyMs);
+
+        WaraMessageSent::dispatch(
+            destination: $normalized,
+            deviceId: $session->device_id,
+            messageId: $result->messageId,
+            latencyMs: $latencyMs,
+            notification: null,
+        );
+
+        return $result;
     }
 
     /**

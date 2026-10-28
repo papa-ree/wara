@@ -1,31 +1,36 @@
 <div>
-    <x-core::page-header
+    <x-wara::hero
         :title="__('Device WhatsApp')"
-        :subtitle="__('Katalog device gateway, dan client mana saja yang memakainya.')">
-        <x-slot name="action">
+        :subtitle="__('Katalog device gateway, dan client mana saja yang memakainya.')"
+        icon="smartphone"
+        :badge="__('Gateway')">
+        <x-slot name="meta">
+            <span class="inline-flex items-center gap-1.5">
+                <x-lucide-radio-tower class="size-3.5" />
+                {{ __('Status koneksi real-time') }}
+            </span>
+        </x-slot>
+
+        <x-slot name="actions">
             {{-- 🔴 Penugasan tidak diubah dari halaman ini. Device hanya
                  menampilkan device yang dipakai client mana pun; memetakan
                  device ke purpose dilakukan di `Wara > Client`. Tanpa catatan
                  ini, admin akan mencari form penugasan yang sudah tidak ada. --}}
-            <div class="flex flex-wrap items-center gap-3">
-                <x-core::secondary-button
-                    link
-                    href="{{ route('wara.client.index') }}"
-                    label="{{ __('Kelola Client') }}" />
+            <a href="{{ route('wara.client.index') }}"
+               class="inline-flex items-center gap-2 rounded-xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-white/20 backdrop-blur-sm transition hover:bg-white/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+                <x-lucide-users class="size-4" />
+                {{ __('Kelola Client') }}
+            </a>
 
-                <x-core::button
-                    type="button"
-                    label="{{ __('Sinkronkan Sekarang') }}"
+            <button type="button"
                     wire:click="syncNow"
                     wire:loading.attr="disabled"
-                    spinner="syncNow">
-                    <x-slot name="icon">
-                        <x-lucide-refresh-cw class="w-4 h-4" />
-                    </x-slot>
-                </x-core::button>
-            </div>
+                    class="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-teal-800 shadow-sm transition hover:bg-teal-50 disabled:cursor-wait disabled:opacity-70 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+                <x-lucide-refresh-cw class="size-4" wire:loading.class="animate-spin" wire:target="syncNow" />
+                {{ __('Sinkronkan Sekarang') }}
+            </button>
         </x-slot>
-    </x-core::page-header>
+    </x-wara::hero>
 
     {{-- Peringatan §8.2: sesi login yang habis percobaannya.
          DISISIPKAN DI ATAS peringatan device karena urutan risikonya berbeda.

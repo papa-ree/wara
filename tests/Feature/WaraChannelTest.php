@@ -402,6 +402,31 @@ describe('pelaporan kegagalan (PRD §13.6)', function () {
     // dikembalikan ke aslinya antar-test, jadi `Event::listen()` pada test
     // berikutnya akan terdaftar pada dispatcher palsu dan tidak pernah
     // terpanggil. Listener asli dipakai supaya setiap test berdiri sendiri.
+    it('mendispatch NotificationFailed dengan retry_after saat cooldown, tanpa menahan worker', function () {
+        config()->set('wara.cooldown_seconds', 60);
+        config()->set('wara.max_blocking_wait_seconds', 5);
+
+        seedReadyDevice();
+        FailedNotificationCollector::start();
+
+        NotificationFacade::route('wara', '628123456789')
+            ->notify(new WaraTestNotification);
+
+        // Pengiriman kedua ke nomor yang sama masih dalam cooldown 60 detik,
+        // jauh di atas batas tunggu 5 detik. Kanal tidak boleh memblokir
+        // sampai `max_execution_time`; ia harus melapor dan menyerahkan
+        // penjadwalan ulang ke pemanggil.
+        NotificationFacade::route('wara', '628123456789')
+            ->notify(new WaraTestNotification);
+
+        $data = FailedNotificationCollector::seen()[0]['data'] ?? [];
+
+        expect(FailedNotificationCollector::channels())->toContain('wara')
+            ->and($data['retry_after'] ?? null)->toBeInt()->toBeGreaterThan(0);
+
+        Http::assertSentCount(1);
+    });
+
     it('mendispatch NotificationFailed saat device offline', function () {
         seedReadyDevice(['is_connected' => false, 'is_logged_in' => false]);
         FailedNotificationCollector::start();

@@ -2,6 +2,7 @@
 
 namespace Bale\Wara\Support;
 
+use Bale\Wara\Exceptions\CooldownException;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -13,10 +14,16 @@ use Illuminate\Support\Facades\Cache;
  * jadi burst pesan dari nomor yang sama, dan itu penyebab paling cepat
  * restriksi akun WhatsApp.
  *
- * Keputusan desain penting: cooldown **MENAHAN**, bukan mengembalikan error.
- * Memanggil kode dengan nomor yang sedang dalam cooldown harus memblokir dan
- * menunggu, karena pemanggil (scraper login) tidak punya mekanisme backoff
- * sendiri. Menolak dengan exception hanya memindahkan masalah ke pemanggil.
+ * Keputusan desain penting: cooldown **MENAHAN** sampai batas aman, lalu
+ * menyerahkan keputusan ke pemanggil.
+ *
+ * Tidur tanpa batas tidak mungkin: `usleep` ikut dihitung `max_execution_time`
+ * pada request HTTP (60 detik), sehingga penantian penuh 61 detik justru
+ * mematikan request — persis yang dulu terjadi di `SendPacer.php:152`.
+ * Karena itu penantian dibatasi `wara.max_blocking_wait_seconds`; sisa di atas
+ * batas itu dilempar sebagai `CooldownException` supaya pemanggil HTTP bisa
+ * membalas `429` + `Retry-After` dan pemanggil antrean bisa menjadwalkan
+ * ulang alih-alih menahan worker.
  */
 class SendPacer
 {
@@ -135,11 +142,19 @@ class SendPacer
     }
 
     /**
-     * Tahan pengiriman sampai cooldown nomor habis.
+     * Tahan pengiriman sampai cooldown nomor habis — dalam batas aman.
      *
      * Mengembalikan jumlah detik yang benar-benar ditunggu.
+     *
+     * @param  int|null  $maxBlockingSeconds  Batas tunggu untuk panggilan ini.
+     *                                        `null` = pakai config. `0` = jangan
+     *                                        pernah menahan; langsung lempar
+     *                                        `CooldownException` bila masih
+     *                                        dalam cooldown.
+     *
+     * @throws CooldownException
      */
-    public function waitForPhoneCooldown(string $phone): int
+    public function waitForPhoneCooldown(string $phone, ?int $maxBlockingSeconds = null): int
     {
         $remaining = $this->phoneCooldownRemaining($phone);
 
@@ -147,11 +162,27 @@ class SendPacer
             return 0;
         }
 
+        $cap = $maxBlockingSeconds ?? $this->maxBlockingWaitSeconds();
+
         // `usleep` menerima mikrodetik. Tambahan 1 detik supaya jam dinding
         // tidak membuat kita hesitasi sebelum cooldown benar-benar habis.
-        usleep(($remaining + 1) * 1_000_000);
+        $wait = $remaining + 1;
+
+        if ($cap <= 0 || $wait > $cap) {
+            throw CooldownException::forPhone($phone, $remaining, $cap);
+        }
+
+        usleep($wait * 1_000_000);
 
         return $remaining;
+    }
+
+    /**
+     * Batas tunggu cooldown yang masih boleh menahan proses.
+     */
+    public function maxBlockingWaitSeconds(): int
+    {
+        return (int) config('wara.max_blocking_wait_seconds', 5);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 use App\Models\User;
 use Bale\Wara\Analytics\WaraAnalytics;
+use Bale\Wara\Analytics\WaraFilter;
 use Bale\Wara\Livewire\Pages\Landlord\Analytics\Index as AnalyticsIndex;
 use Bale\Wara\Livewire\Pages\Landlord\Analytics\Section\AnalyticsBreakdown;
 use Bale\Wara\Livewire\Pages\Landlord\Analytics\Section\AnalyticsFunnel;
@@ -112,8 +113,11 @@ describe('volume per status', function () {
 });
 
 describe('funnel per bucket', function () {
-    it('selalu mengembalikan jumlah bucket yang sama, terisi atau tidak', function () {
-        expect($this->analytics->funnel(24))->toHaveCount(WaraAnalytics::FUNNEL_BUCKETS);
+    it('mengembalikan jumlah bucket sesuai rentang, terisi atau tidak', function () {
+        expect($this->analytics->funnel(24))->toHaveCount(WaraAnalytics::FUNNEL_BUCKETS)
+            ->and($this->analytics->funnel(168))->toHaveCount(28)
+            ->and($this->analytics->funnel(720))->toHaveCount(30)
+            ->and($this->analytics->funnel(8760))->toHaveCount(26);
     });
 
     it('menaruh baris ke bucket yang benar', function () {
@@ -129,6 +133,20 @@ describe('funnel per bucket', function () {
             ->and($last['rejected'])->toBe(1);
     });
 
+    it('🔴 baris yang lebih tua tidak menumpuk di bucket terakhir', function () {
+        // Regresi: `now->diffInSeconds(slot)` bernilai negatif untuk slot yang
+        // sudah lewat. Versi lama menganggapnya "baru saja", sehingga seluruh
+        // trafik 24 jam jatuh ke bucket terakhir dan grafik selalu ramai di
+        // ujung kanan tanpa error apa pun.
+        analyticsLog(['status' => 'accepted', 'created_at' => now()->subHours(2)]);
+
+        $funnel = $this->analytics->funnel(24);
+        $last = end($funnel);
+
+        expect($last['accepted'])->toBe(0)
+            ->and(array_sum(array_column($funnel, 'accepted')))->toBe(1);
+    });
+
     it('bucket terurut dari lama ke baru', function () {
         $funnel = $this->analytics->funnel(24);
 
@@ -138,15 +156,15 @@ describe('funnel per bucket', function () {
         expect($first)->toBeLessThan($last);
     });
 
-    it('lebar bucket menyesuaikan rentang, bukan jumlah bucket', function () {
-        // 24 jam / 24 bucket = 1 jam. 6 jam / 24 bucket = 15 menit.
-        $wide = $this->analytics->funnel(24);
-        $narrow = $this->analytics->funnel(6);
+    it('rentang lebih panjang menghasilkan bucket lebih lebar', function () {
+        // 24 jam / 24 bucket = 1 jam. 365 hari / 26 bucket ≈ 14 hari.
+        $day = $this->analytics->funnel(24);
+        $year = $this->analytics->funnel(8760);
 
-        $wideSpan = end($wide)['at']->timestamp - $wide[0]['at']->timestamp;
-        $narrowSpan = end($narrow)['at']->timestamp - $narrow[0]['at']->timestamp;
+        $daySpan = end($day)['at']->timestamp - $day[0]['at']->timestamp;
+        $yearSpan = end($year)['at']->timestamp - $year[0]['at']->timestamp;
 
-        expect($wideSpan)->toBeGreaterThan($narrowSpan);
+        expect($yearSpan)->toBeGreaterThan($daySpan);
     });
 
     it('status ignored tidak dihitung sebagai throughput pesan', function () {
@@ -165,7 +183,9 @@ it('🔴 grafik plotting kelima status throughput, bukan hanya tiga', function (
     // dataset itu harus persis bucket-nya. Kalau `delivered`/`read` tidak
     // digambar, angka "Masuk" di kartu KPI tidak akan pernah cocok dengan
     // garis mana pun di grafik.
-    $component = Livewire::test(AnalyticsFunnel::class);
+    $component = Livewire::test(AnalyticsFunnel::class, [
+        'filter' => new WaraFilter,
+    ]);
 
     $datasets = $component->viewData('chartDatasets');
     $funnel = $component->viewData('funnel');
@@ -539,8 +559,26 @@ describe('halaman Analitik', function () {
     it('menerima rentang yang ada di daftar', function () {
         Livewire::actingAs($this->user)
             ->test(AnalyticsIndex::class)
-            ->set('range', 6)
-            ->assertSet('range', 6);
+            ->set('range', 168)
+            ->assertSet('range', 168);
+    });
+
+    it('🔴 filter hanya berisi periode hari, minggu, bulan, dan tahun', function () {
+        expect(WaraAnalytics::RANGES)->toBe([24, 168, 720, 8760])
+            ->and(WaraAnalytics::rangeLabel(24))->toBe(__('Hari'))
+            ->and(WaraAnalytics::rangeLabel(168))->toBe(__('Minggu'))
+            ->and(WaraAnalytics::rangeLabel(720))->toBe(__('Bulan'))
+            ->and(WaraAnalytics::rangeLabel(8760))->toBe(__('Tahun'));
+    });
+
+    it('menampilkan keempat pilihan periode dan keterangan rentang aktif', function () {
+        Livewire::actingAs($this->user)
+            ->test(AnalyticsIndex::class)
+            ->assertSee(__('Hari'))
+            ->assertSee(__('Minggu'))
+            ->assertSee(__('Bulan'))
+            ->assertSee(__('Tahun'))
+            ->assertSee(__('24 jam terakhir'));
     });
 
     it('merender komponen anak dengan range yang sama', function () {
@@ -559,8 +597,8 @@ describe('halaman Analitik', function () {
         // menampilkan rentang lama.
         Livewire::actingAs($this->user)
             ->test(AnalyticsIndex::class)
-            ->call('selectRange', 6)
-            ->assertSet('range', 6);
+            ->call('selectRange', 168)
+            ->assertSet('range', 168);
     });
 
     it('🔴 rentang dari event divalidasi, bukan dipercaya', function () {
@@ -571,10 +609,10 @@ describe('halaman Analitik', function () {
     });
 
     it('rentang tersimpan di query string', function () {
-        Livewire::withQueryParams(['range' => 72])
+        Livewire::withQueryParams(['range' => 720])
             ->actingAs($this->user)
             ->test(AnalyticsIndex::class)
-            ->assertSet('range', 72);
+            ->assertSet('range', 720);
     });
 
     it('🔴 range jelek di query string tidak merusak halaman', function () {
@@ -612,8 +650,8 @@ describe('halaman Analitik', function () {
         // dihapus, range anak diam-diam kembali ke default-nya sendiri.
         $html = Livewire::actingAs($this->user)
             ->test(AnalyticsIndex::class)
-            ->call('selectRange', 6)
-            ->assertSet('range', 6)
+            ->call('selectRange', 8760)
+            ->assertSet('range', 8760)
             ->html();
 
         foreach (['analytics-header', 'analytics-summary', 'analytics-funnel', 'analytics-breakdown'] as $child) {
@@ -621,18 +659,16 @@ describe('halaman Analitik', function () {
         }
     });
 
-    it('🔴 tombol header men-dispatch, bukan $set', function () {
-        // Ini yang menjamin tombol di browser benar-benar mengubah range milik
-        // Index. Kalau view-nya berubah lagi ke `$set`, tes ini gagal.
-        //
-        // 🔴 Beruang tanpa kurung kurawal (`range: 6`) melempar SyntaxError di
-        // browser — `evaluateActionExpression` mengkompilasi ekspresi jadi
-        // `new Function(...)`, dan `range:` bukan sintaks JS yang valid. Versi
-        // lama meng-assert sintaks yang rusak ini, jadi tombol gagal diam-diam.
+    it('🔴 tombol header mengubah range lewat Alpine, bukan $set', function () {
+        // Header memakai optimistic local state Alpine agar tombol langsung
+        // merespons sebelum round-trip Livewire selesai. Dispatch ke Index
+        // tetap wajib memakai payload berkurung kurawal supaya valid sebagai
+        // ekspresi JavaScript.
         $view = file_get_contents(__DIR__.'/../../resources/views/livewire/pages/landlord/analytics/section/analytics-header.blade.php');
 
-        expect($view)->toContain('wire:click="$dispatch(\'analytics-range-changed\', { range: ')
-            ->not->toContain('wire:click="$dispatch(\'analytics-range-changed\', range: ')
+        expect($view)->toContain('x-on:click="selectPreset(')
+            ->toContain('$dispatch(\'analytics-range-changed\', { range: hours })')
+            ->not->toContain('$dispatch(\'analytics-range-changed\', range: ')
             ->not->toContain('wire:click="$set(');
     });
 
@@ -668,7 +704,9 @@ describe('halaman Analitik', function () {
 
     it('latency null ditampilkan sebagai —, bukan 0 ms', function () {
         Livewire::actingAs($this->user)
-            ->test(AnalyticsSummary::class)
+            ->test(AnalyticsSummary::class, [
+                'filter' => new WaraFilter,
+            ])
             ->assertSee('—');
     });
 });

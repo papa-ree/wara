@@ -6,13 +6,13 @@
         <div class="flex items-center gap-3">
             <div @class([
                 'size-9 rounded-lg flex items-center justify-center shrink-0 border',
-                'bg-green-50 border-green-200/50 dark:bg-green-900/20 dark:border-green-700/30' => $record->isSendable(),
+                'bg-emerald-50 border-emerald-200/50 dark:bg-emerald-900/20 dark:border-emerald-700/30' => $record->isSendable(),
                 'bg-amber-50 border-amber-200/50 dark:bg-amber-900/20 dark:border-amber-700/30' => $record->is_present && ! $record->is_logged_in,
                 'bg-gray-50 border-gray-200/50 dark:bg-gray-900/20 dark:border-gray-700/30' => ! $record->is_present,
             ])>
                 <x-lucide-smartphone @class([
                     'size-4',
-                    'text-green-600 dark:text-green-400' => $record->isSendable(),
+                    'text-emerald-600 dark:text-emerald-400' => $record->isSendable(),
                     'text-amber-600 dark:text-amber-400' => $record->is_present && ! $record->is_logged_in,
                     'text-gray-500 dark:text-gray-400' => ! $record->is_present,
                 ]) />
@@ -48,12 +48,12 @@
             <div class="flex flex-wrap gap-1.5">
                 @foreach ($deviceRoutes as $route)
                     <span wire:key="device-route-chip-{{ $route->getKey() }}"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border
+                        class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs
                             {{ $route->outbound_enabled
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-100 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/40'
-                                : 'bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/40' }}">
+                                ? 'border-teal-100 bg-teal-50 text-teal-700 dark:border-teal-800/40 dark:bg-teal-900/20 dark:text-teal-300'
+                                : 'border-rose-100 bg-rose-50 text-rose-700 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-400' }}">
                         <span class="font-mono">{{ $route->purpose }}</span>
-                        <span class="text-indigo-300 dark:text-indigo-500" aria-hidden="true">&rarr;</span>
+                        <span class="text-teal-400 dark:text-teal-500" aria-hidden="true">&rarr;</span>
                         <span>{{ $route->client?->name ?? __('(client terhapus)') }}</span>
                         @unless ($route->outbound_enabled)
                             <span class="sr-only">{{ __('kirim mati') }}</span>
@@ -69,7 +69,7 @@
     <td class="px-4 py-3.5 hidden sm:table-cell">
         <span @class([
             'inline-flex items-center gap-x-1.5 py-1.5 px-3 rounded-full text-xs font-medium ring-1 ring-inset',
-            'bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/30 dark:text-green-400' => $record->isSendable(),
+            'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-900/30 dark:text-emerald-400' => $record->isSendable(),
             'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-900/30 dark:text-amber-400' => $record->is_present && ! $record->is_logged_in,
             'bg-gray-50 text-gray-600 ring-gray-500/20 dark:bg-gray-800/50 dark:text-gray-400' => ! $record->is_present,
         ])>

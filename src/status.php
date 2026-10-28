@@ -37,11 +37,13 @@ return [
     'subtitle' => 'Pembungkus gateway WhatsApp (GOWA). Seluruh fase implementasi selesai sampai Fase 13; '
         .'Halaman Analitik (A1+A2) selesai 6 Okt 2026; branding pesan per client (header/footer) '
         .'dibangun dari nol 7 Okt 2026; alert Slack saat device terputus (§8.3) selesai 9 Okt 2026. '
-        .'Fase 14 (manajemen device dari UI, PRD §15) sudah direncanakan tapi belum dikerjakan. '
+        .'Fase 15 (manajemen template pesan guest + review admin, PRD §16) selesai 20 Okt 2026. '
+        .'Fase 16 (batas replikasi WABA: GOWA saja, tanpa Meta, PRD §17) selesai 28 Okt 2026. '
+        .'Fase 14 (manajemen device dari UI, PRD §15) selesai 28 Okt 2026. '
         .'Sisa yang tercatat adalah persiapan produksi dan keputusan yang masih terbuka (A3-A5). '
         .'Daftar kerjanya di `docs/wara/TODO.md`.',
 
-    'updated_at' => '2026-10-09',
+    'updated_at' => '2026-10-28',
 
     'doc' => [
         'label' => 'Dokumen',
@@ -149,11 +151,36 @@ return [
                 ],
                 [
                     'label' => 'Fase 14 — Manajemen device dari UI (PRD §15)',
-                    'status' => 'open',
-                    'meta' => 'PLAN §18',
-                    'note' => 'Rencana 9 Okt 2026: tambah slot, login QR/kode, reconnect, logout, hapus slot, '
-                        .'webhook per-device — semua dari `Wara > Device` tanpa membuka dashboard GOWA. '
-                        .'Belum ada kodenya. Keputusan #27-#32; daftar kerja di `docs/wara/TODO.md` §D.',
+                    'status' => 'done',
+                    'meta' => 'PLAN §18, 28 Okt 2026',
+                    'note' => 'Tambah slot, login QR/kode, reconnect, logout, hapus slot, dan webhook per-device '
+                        .'sekarang bisa dilakukan dari `Wara > Device` tanpa membuka dashboard GOWA. QR dikirim '
+                        .'sebagai data-URI hasil unduhan server-side, jadi host gateway tidak pernah sampai ke '
+                        .'browser. Webhook per-device menimpa webhook global — form memperingatkan bahwa '
+                        .'mengarahkan URL menjauh mematikan fan-out dan `wara_logs` device itu. Hapus slot '
+                        .'ditolak selama `wara_routes` masih merujuk device. Nol migration; permission baru '
+                        .'`wara.device.manage` lewat `wara:install`. Daftar kerja di `docs/wara/TODO.md` §D.',
+                ],
+                [
+                    'label' => 'Fase 15 — Manajemen template pesan (PRD §16)',
+                    'status' => 'done',
+                    'meta' => 'PLAN §19, 20 Okt 2026',
+                    'note' => 'Guest menyusun template berkategori pemerintahan (`LAYANAN|INFORMASI|OTP`) '
+                        .'dan mengajukannya; admin meninjau di `Wara > Template`; hanya `APPROVED` yang '
+                        .'bisa dikirim lewat API. GOWA tidak punya endpoint template, jadi pengiriman '
+                        .'dirakit ulang: header teks/media + body + footer + tombol sebagai teks bernomor. '
+                        .'Detail GOWA tetap hanya di `GowaGateway` (`sendImage`/`sendVideo`/`sendDocument`). '
+                        .'Daftar kerja di `docs/wara/TODO.md` §T.',
+                ],
+                [
+                    'label' => 'Fase 16 — Batas replikasi WABA (PRD §17)',
+                    'status' => 'done',
+                    'meta' => 'PLAN §20, 28 Okt 2026',
+                    'note' => 'Pertanyaan "apakah kita menuju WABA resmi?" dijawab tidak: integrasi tetap '
+                        .'GOWA saja, WABA ditiru bentuknya. Adapter `WabaGateway`, jendela 24 jam, kolom '
+                        .'`language`/`external_id`, dan flag per-client dibatalkan sebelum ditulis. Satu-satunya '
+                        .'perubahan kode: `error_code: template_required` pada 422 template ditolak. '
+                        .'Daftar kerja di `docs/wara/TODO.md` §S.',
                 ],
             ],
         ],
@@ -308,7 +335,8 @@ return [
                 [
                     'label' => '`wara:install` tidak membuat client maupun route',
                     'status' => 'open',
-                    'note' => '🔴 `wara:install` hanya men-seed 7 permission — nol baris `WaraClient`, nol route. '
+                    'note' => '🔴 `wara:install` hanya men-seed 11 permission + service guest `wara` — nol baris '
+                        .'`WaraClient`, nol route. '
                         .'Konsekuensinya harus terlihat: instalasi Wara tanpa `bale/srikandi` '
                         .'berarti nol client, nol route, dan gateway tidak bisa dipakai. Daftar client harus '
                         .'dibuat manual lewat `Wara > Client` saat belum ada package lain yang memilikinya.',

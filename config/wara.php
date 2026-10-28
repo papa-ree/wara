@@ -92,6 +92,14 @@ return [
     | `cooldown_seconds`          - jarak minimum antar pengiriman ke nomor yang
     |                              sama. OTP kedua ke nomor yang sama ditahan,
     |                              bukan dikirim ulang.
+    | `max_blocking_wait_seconds` - batas berapa lama proses boleh ditahan
+    |                              menunggu cooldown. `usleep` ikut dihitung
+    |                              `max_execution_time` (60 detik di request
+    |                              HTTP), jadi menunggu penuh 61 detik justru
+    |                              mematikan request. Sisa di atas batas ini
+    |                              dilempar sebagai `CooldownException`, dan
+    |                              pemanggil membalas 429 + `Retry-After`.
+    |                              🔴 `<= 0` berarti JANGAN PERNAH menahan proses.
     | `max_attempts_per_session`  - batas percobaan kirim per sesi login, agar
     |                              pola "captcha salah → kirim ulang" tidak
     |                              berubah jadi burst.
@@ -122,6 +130,7 @@ return [
     */
 
     'cooldown_seconds' => (int) env('WARA_COOLDOWN_SECONDS', 60),
+    'max_blocking_wait_seconds' => (int) env('WARA_MAX_BLOCKING_WAIT', 5),
     'max_attempts_per_session' => (int) env('WARA_MAX_ATTEMPTS_PER_SESSION', 3),
     'session_window_seconds' => (int) env('WARA_SESSION_WINDOW_SECONDS', 900),
     'exhausted_alert_after_minutes' => (int) env('WARA_EXHAUSTED_ALERT_AFTER', 15),
@@ -219,5 +228,19 @@ return [
         'enabled' => (bool) env('WARA_SLACK_ENABLED', false),
         'webhook_url' => env('WARA_SLACK_WEBHOOK_URL'),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Layout Panel Guest (§16.5)
+    |--------------------------------------------------------------------------
+    |
+    | Layout yang membungkus panel guest Wara (daftar & editor template).
+    | Default memakai layout rakaca -- panel guest memang milik rakaca, dan
+    | `bale/wara` hanya menumpang di sana. Dibuat configurable supaya satu
+    | instalasi bisa memakai layout guest-nya sendiri tanpa mengubah package.
+    |
+    */
+
+    'guest_layout' => env('WARA_GUEST_LAYOUT', 'rakaca::layouts.app'),
 
 ];

@@ -3,6 +3,7 @@
 use Bale\Wara\Http\Controllers\Api\RouteIndexController;
 use Bale\Wara\Http\Controllers\Api\RouteUpsertController;
 use Bale\Wara\Http\Controllers\Api\SendController;
+use Bale\Wara\Http\Controllers\Api\TemplateIndexController;
 use Bale\Wara\Http\Controllers\WebhookController;
 use Illuminate\Support\Facades\Route;
 
@@ -44,4 +45,8 @@ Route::middleware('bale.api')->prefix('api/v1/wara')->name('api.v1.wara.')->grou
     Route::put('routes', RouteUpsertController::class)
         ->middleware('scope:wara.routes.write')
         ->name('routes.upsert');
+
+    Route::get('templates', TemplateIndexController::class)
+        ->middleware('scope:wara.templates.read')
+        ->name('templates.index');
 });

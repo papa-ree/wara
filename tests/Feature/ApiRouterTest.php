@@ -7,6 +7,7 @@ use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -98,6 +99,34 @@ describe('POST /api/v1/wara/send', function () {
             ->assertJson(['status' => 'sent', 'purpose' => 'notifikasi']);
 
         Http::assertSent(fn (Request $r) => $r->hasHeader('X-Device-Id', $ctx['session']->device_id));
+    });
+
+    it('membalas 429 + Retry-After saat nomor masih dalam cooldown', function () {
+        Cache::flush();
+        config()->set('wara.cooldown_seconds', 60);
+        config()->set('wara.max_blocking_wait_seconds', 5);
+
+        $ctx = clientWithTokenApiTest('notifikasi');
+
+        $payload = [
+            'to' => '0812 3456 7890',
+            'message' => 'halo',
+        ];
+
+        $this->postJson('/api/v1/wara/send', $payload, $ctx['header'])->assertOk();
+
+        $response = $this->postJson('/api/v1/wara/send', $payload, $ctx['header']);
+
+        $response->assertStatus(429);
+
+        $json = $response->json();
+
+        expect($json['status'])->toBe('cooldown')
+            ->and($json['retry_after'])->toBeInt()->toBeGreaterThan(0)
+            ->and((int) $response->headers->get('Retry-After'))->toBe($json['retry_after']);
+
+        // Tetap satu request ke gateway: pengiriman kedua tidak pernah terjadi.
+        Http::assertSentCount(1);
     });
 
     it('🔴 menolak token yang tidak dipetakan ke client', function () {

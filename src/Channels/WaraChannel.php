@@ -2,6 +2,7 @@
 
 namespace Bale\Wara\Channels;
 
+use Bale\Wara\Exceptions\CooldownException;
 use Bale\Wara\WaraManager;
 use Illuminate\Notifications\Events\NotificationFailed;
 use Illuminate\Notifications\Notification;
@@ -78,6 +79,16 @@ class WaraChannel
 
         try {
             $result = $this->wara->sendMessage($phone, $message, notification: $notification::class);
+        } catch (CooldownException $e) {
+            // Cooldown adalah kondisi sementara, bukan kegagalan permanen.
+            // `retry_after` diteruskan lewat `NotificationFailed` supaya
+            // pemanggil bisa menjadwalkan ulang notifikasinya, bukan menahan
+            // worker sampai `max_execution_time`.
+            $this->fail($notifiable, $notification, $e->getMessage(), $e, [
+                'retry_after' => $e->retryAfter,
+            ]);
+
+            return null;
         } catch (Throwable $e) {
             // Device offline, cooldown, device tidak ada, atau gateway menolak.
             // Semua itu kondisi operasional — laporkan, jangan lempar.

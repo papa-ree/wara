@@ -3,16 +3,30 @@
         :items="[['label' => __('Client Wara'), 'route' => 'wara.client.index']]"
         :active="$client?->exists ? __('Edit Client') : __('Client Baru')" />
 
-    <x-core::page-header
+    <x-wara::hero
         :title="$client?->exists ? __('Edit Client Wara') : __('Client Wara Baru')"
-        :subtitle="__('Petakan tujuan layanan ke device, dan daftarkan endpoint webhook client.')">
-        <x-slot name="action">
-            <x-core::secondary-button
-                link
-                href="{{ route('wara.client.index') }}"
-                label="{{ __('Kembali ke daftar') }}" />
+        :subtitle="__('Petakan tujuan layanan ke device, dan daftarkan endpoint webhook client.')"
+        icon="users"
+        :badge="__('Client')">
+        <x-slot name="meta">
+            <span class="inline-flex items-center gap-1.5">
+                <x-lucide-route class="size-3.5" />
+                {{ __('Purpose ke device') }}
+            </span>
+            <span class="inline-flex items-center gap-1.5">
+                <x-lucide-webhook class="size-3.5" />
+                {{ __('Endpoint webhook') }}
+            </span>
         </x-slot>
-    </x-core::page-header>
+
+        <x-slot name="actions">
+            <a href="{{ route('wara.client.index') }}"
+               class="inline-flex items-center gap-2 rounded-xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white ring-1 ring-white/20 backdrop-blur-sm transition hover:bg-white/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70">
+                <x-lucide-arrow-left class="size-4" />
+                {{ __('Kembali ke daftar') }}
+            </a>
+        </x-slot>
+    </x-wara::hero>
 
     {{-- Info penting: kenapa penugasan tidak lagi di halaman Device --}}
     <x-core::alert :title="__('Penugasan milik client')">
@@ -43,21 +57,23 @@
         <input type="hidden" name="delete_endpoint" value="">
 
         {{-- Identitas client --}}
-        <x-core::page-container>
-            <h2 class="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ __('Identitas Client') }}</h2>
-
+        <x-wara::card
+            :title="__('Identitas Client')"
+            :subtitle="__('Nama, tipe, dan token yang mengikat client.')"
+            icon="user-round"
+            accent="teal">
             <div x-data="{ type: @js(old('type', $type)) }">
                 <div class="grid gap-4 sm:grid-cols-3">
                     <div class="sm:col-span-2">
                         <x-core::label :value="__('Nama')" for="name" />
-                        <x-core::input id="name" type="text" name="name" value="{{ old('name', $name) }}" />
+                        <x-core::input id="name" type="text" name="name" value="{{ old('name', $name) }}" class="focus:!border-teal-500 focus:!ring-teal-500" />
                         <x-core::input-error for="name" class="mt-1" />
                     </div>
 
                     <div>
                         <x-core::label :value="__('Tipe')" for="type" />
                         <select id="type" name="type" x-model="type"
-                            class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                            class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">
                             @foreach (\Bale\Wara\Models\WaraClient::TYPES as $t)
                                 <option value="{{ $t }}" @selected(old('type', $type) === $t)>{{ $t }}</option>
                             @endforeach
@@ -72,7 +88,7 @@
             <div class="mt-4" x-cloak x-show="type === @js(\Bale\Wara\Models\WaraClient::TYPE_TOKEN)">
                 <x-core::label :value="__('API Token')" for="apiTokenId" />
                 <select id="apiTokenId" name="apiTokenId"
-                    class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                    class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">
                     <option value="">{{ __('— belum dipilih —') }}</option>
                     @foreach ($apiTokens as $token)
                         <option value="{{ $token['id'] }}" @disabled(! $token['available']) @selected((string) old('apiTokenId', $apiTokenId) === (string) $token['id'])>
@@ -88,7 +104,7 @@
             </div>
 
             <label class="mt-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                <x-core::checkbox name="is_active" value="1" :checked="(bool) old('is_active', $is_active)" />
+                <x-wara::checkbox name="is_active" value="1" :checked="(bool) old('is_active', $is_active)" />
                 <span>
                     {{ __('Aktif') }}
                     <span class="block text-xs text-gray-500 dark:text-gray-400">
@@ -111,19 +127,22 @@
                     </x-core::alert>
                 </div>
             @endif
-        </x-core::page-container>
+        </x-wara::card>
 
         {{-- Route: purpose -> device --}}
-        <x-core::page-container>
-            <div class="mb-4 flex items-center justify-between">
-                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    {{ __('Peta Purpose ke Device') }}
-                </h2>
-                <x-core::secondary-button
-                    type="button"
-                    onclick="addRouteRow()"
-                    label="{{ __('Tambah Route') }}" />
-            </div>
+        <x-wara::card
+            :title="__('Peta Purpose ke Device')"
+            :subtitle="__('Setiap client punya peta sendiri; satu device boleh dipakai banyak client.')"
+            icon="route"
+            accent="emerald">
+            <x-slot name="header">
+                <button type="button"
+                        onclick="addRouteRow()"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 transition hover:bg-teal-50 dark:border-teal-800/40 dark:bg-gray-900 dark:text-teal-300 dark:hover:bg-teal-900/20">
+                    <x-lucide-plus class="size-3.5" />
+                    {{ __('Tambah Route') }}
+                </button>
+            </x-slot>
 
             <x-core::input-error for="routes" class="mb-3" />
 
@@ -136,20 +155,21 @@
             <div id="routes-container" class="space-y-3">
                 @foreach ($formRows as $i => $route)
                     <div data-route-row
-                        class="flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+                        class="flex flex-wrap items-end gap-3 rounded-xl border border-gray-100 bg-gray-50/40 p-3 dark:border-white/[0.06] dark:bg-gray-900/40">
                         <input type="hidden" name="routes[{{ $i }}][id]" value="{{ $route['id'] ?? '' }}">
                         <div class="w-40">
                             <x-core::label :value="__('Purpose')" />
                             <x-core::input type="text" name="routes[{{ $i }}][purpose]"
                                 value="{{ old('routes.'.$i.'.purpose', $route['purpose'] ?? '') }}"
-                                placeholder="notifikasi" />
+                                placeholder="notifikasi"
+                                class="focus:!border-teal-500 focus:!ring-teal-500" />
                             <x-core::input-error :for="'routes.'.$i.'.purpose'" class="mt-1" />
                         </div>
 
                         <div class="min-w-56 flex-1">
                             <x-core::label :value="__('Device')" />
                             <select name="routes[{{ $i }}][device_id]"
-                                class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                                class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">
                                 @foreach ($devices as $d)
                                     <option value="{{ $d['device_id'] }}" @selected((string) old('routes.'.$i.'.device_id', $route['device_id'] ?? '') === (string) $d['device_id'])>
                                         {{ $d['label'] }}{{ $d['ready'] ? '' : ' — belum siap' }}
@@ -160,37 +180,43 @@
                         </div>
 
                         <label class="flex items-center gap-1.5 text-xs text-gray-700 dark:text-gray-300">
-                            <x-core::checkbox name="routes[{{ $i }}][outbound_enabled]" value="1"
+                            <x-wara::checkbox name="routes[{{ $i }}][outbound_enabled]" value="1"
                                 :checked="(bool) old('routes.'.$i.'.outbound_enabled', $route['outbound_enabled'] ?? false)" />
                             {{ __('Kirim') }}
                         </label>
 
                         <label class="flex items-center gap-1.5 text-xs text-gray-700 dark:text-gray-300">
-                            <x-core::checkbox name="routes[{{ $i }}][inbound_webhook_enabled]" value="1"
+                            <x-wara::checkbox name="routes[{{ $i }}][inbound_webhook_enabled]" value="1"
                                 :checked="(bool) old('routes.'.$i.'.inbound_webhook_enabled', $route['inbound_webhook_enabled'] ?? false)" />
                             {{ __('Webhook') }}
                         </label>
 
-                        <x-core::danger-button
-                            type="button"
-                            onclick="this.closest('[data-route-row]').remove()"
-                            label="{{ __('Hapus') }}" />
+                        <button type="button"
+                                onclick="this.closest('[data-route-row]').remove()"
+                                class="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 dark:border-rose-800/40 dark:text-rose-400 dark:hover:bg-rose-900/20">
+                            <x-lucide-trash-2 class="size-3.5" />
+                            {{ __('Hapus') }}
+                        </button>
                     </div>
                 @endforeach
             </div>
-        </x-core::page-container>
+        </x-wara::card>
 
         {{-- Endpoint webhook --}}
-        <x-core::page-container x-data="{ showEndpoint: false }">
-            <div class="mb-4 flex items-center justify-between">
-                <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                    {{ __('Endpoint Webhook') }}
-                </h2>
-                <x-core::secondary-button
-                    type="button"
-                    x-on:click="showEndpoint = true"
-                    label="{{ __('Tambah Endpoint') }}" />
-            </div>
+        <x-wara::card
+            :title="__('Endpoint Webhook')"
+            :subtitle="__('Terima event masuk dari gateway di endpoint milik client.')"
+            icon="webhook"
+            accent="sky"
+            x-data="{ showEndpoint: false }">
+            <x-slot name="header">
+                <button type="button"
+                        x-on:click="showEndpoint = true"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-50 dark:border-sky-800/40 dark:bg-gray-900 dark:text-sky-300 dark:hover:bg-sky-900/20">
+                    <x-lucide-plus class="size-3.5" />
+                    {{ __('Tambah Endpoint') }}
+                </button>
+            </x-slot>
 
             @if ($endpoints === [])
                 <p class="text-sm text-gray-500 dark:text-gray-400">
@@ -201,7 +227,7 @@
             <div class="space-y-2">
                 @foreach ($endpoints as $e)
                     <div wire:key="endpoint-{{ $e['id'] }}"
-                        class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+                        class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/40 p-3 dark:border-white/[0.06] dark:bg-gray-900/40">
                         <div class="min-w-0">
                             <span class="font-mono text-sm text-gray-800 dark:text-gray-200">{{ $e['url'] }}</span>
                             <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">
@@ -219,21 +245,24 @@
                             @else
                                 <x-core::badge color="gray" :label="__('nonaktif')" />
                             @endif
-                            <x-core::danger-button
-                                type="button"
-                                onclick="deleteEndpoint(this.form, @js($e['id']))"
-                                label="{{ __('Hapus') }}" />
+                            <button type="button"
+                                    onclick="deleteEndpoint(this.form, @js($e['id']))"
+                                    class="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-50 dark:border-rose-800/40 dark:text-rose-400 dark:hover:bg-rose-900/20">
+                                <x-lucide-trash-2 class="size-3.5" />
+                                {{ __('Hapus') }}
+                            </button>
                         </div>
                     </div>
                 @endforeach
             </div>
 
-            <div x-show="showEndpoint" x-cloak class="mt-4 space-y-3 rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+            <div x-show="showEndpoint" x-cloak class="mt-4 space-y-3 rounded-xl border border-gray-100 bg-gray-50/40 p-3 dark:border-white/[0.06] dark:bg-gray-900/40">
                 <div>
                     <x-core::label :value="__('URL endpoint')" />
                     <x-core::input type="url" name="endpointUrl"
                         value="{{ old('endpointUrl') }}"
-                        placeholder="https://contoh.go.id/webhook/wara" />
+                        placeholder="https://contoh.go.id/webhook/wara"
+                        class="focus:!border-teal-500 focus:!ring-teal-500" />
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                         {{ __('https wajib, kecuali localhost. http:// ke host lain ditolak sebagai perlindungan SSRF.') }}
                     </p>
@@ -242,7 +271,7 @@
 
                 <div>
                     <x-core::label :value="__('Secret')" />
-                    <x-core::input type="password" name="endpointSecret" value="{{ old('endpointSecret') }}" />
+                    <x-core::input type="password" name="endpointSecret" value="{{ old('endpointSecret') }}" class="focus:!border-teal-500 focus:!ring-teal-500" />
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                         {{ __('Minimal :count karakter. Disimpan terenkripsi dan tidak pernah ditampilkan lagi.', ['count' => \Bale\Wara\Models\WaraWebhookEndpoint::MIN_SECRET_LENGTH]) }}
                     </p>
@@ -253,7 +282,8 @@
                     <x-core::label :value="__('Event')" />
                     <x-core::input type="text" name="endpointEvents"
                         value="{{ old('endpointEvents') }}"
-                        placeholder="message, message.ack" />
+                        placeholder="message, message.ack"
+                        class="focus:!border-teal-500 focus:!ring-teal-500" />
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                         {{ __('Pisahkan dengan koma. Kosong berarti terima semua event.') }}
                     </p>
@@ -261,7 +291,7 @@
                 </div>
 
                 <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                    <x-core::checkbox name="endpointEnabled" value="1" :checked="(bool) old('endpointEnabled', false)" />
+                    <x-wara::checkbox name="endpointEnabled" value="1" :checked="(bool) old('endpointEnabled', false)" />
                     {{ __('Aktifkan endpoint ini') }}
                 </label>
 
@@ -269,22 +299,19 @@
                     {{ __('Endpoint disimpan saat Anda menekan Simpan di bawah.') }}
                 </p>
             </div>
-        </x-core::page-container>
+        </x-wara::card>
 
         {{-- Branding pesan: teks statis per client yang ditempelkan
              `WaraManager::sendMessage()` ke semua pesan keluar client ini. --}}
-        <x-core::page-container>
-            <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-                {{ __('Branding Pesan') }}
-            </h2>
-            <p class="mb-4 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ __('Header/footer global untuk SEMUA pesan yang dikirim atas nama client ini, dipisah dari isi pesan dengan dua baris kosong.') }}
-            </p>
-
+        <x-wara::card
+            :title="__('Branding Pesan')"
+            :subtitle="__('Header/footer global untuk SEMUA pesan yang dikirim atas nama client ini, dipisah dari isi pesan dengan dua baris kosong.')"
+            icon="megaphone"
+            accent="amber">
             <div class="space-y-6">
                 <div x-data="{ headerEnabled: @js((bool) old('headerEnabled', $headerEnabled)) }">
                     <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                        <x-core::checkbox id="branding-header-enable" name="headerEnabled" value="1"
+                        <x-wara::checkbox id="branding-header-enable" name="headerEnabled" value="1"
                             :checked="(bool) old('headerEnabled', $headerEnabled)"
                             x-on:change="headerEnabled = $el.checked" />
                         <span>
@@ -297,7 +324,7 @@
 
                     <div x-show="headerEnabled" x-cloak class="mt-3">
                         <x-core::label :value="__('Teks header')" />
-                        <x-core::textarea id="branding-header-text" name="headerText" :rows="3"
+                        <x-core::textarea id="branding-header-text" name="headerText" :rows="3" class="focus:!border-teal-500 focus:!ring-teal-500"
                             placeholder="{{ __('Salam dari Portal Resmi ...') }}">{{ old('headerText', $headerText) }}</x-core::textarea>
                         <x-core::input-error for="headerText" class="mt-1" />
                     </div>
@@ -305,7 +332,7 @@
 
                 <div x-data="{ footerEnabled: @js((bool) old('footerEnabled', $footerEnabled)) }">
                     <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                        <x-core::checkbox id="branding-footer-enable" name="footerEnabled" value="1"
+                        <x-wara::checkbox id="branding-footer-enable" name="footerEnabled" value="1"
                             :checked="(bool) old('footerEnabled', $footerEnabled)"
                             x-on:change="footerEnabled = $el.checked" />
                         <span>
@@ -318,16 +345,20 @@
 
                     <div x-show="footerEnabled" x-cloak class="mt-3">
                         <x-core::label :value="__('Teks footer')" />
-                        <x-core::textarea id="branding-footer-text" name="footerText" :rows="3"
+                        <x-core::textarea id="branding-footer-text" name="footerText" :rows="3" class="focus:!border-teal-500 focus:!ring-teal-500"
                             placeholder="{{ __('Balas STOP untuk berhenti ...') }}">{{ old('footerText', $footerText) }}</x-core::textarea>
                         <x-core::input-error for="footerText" class="mt-1" />
                     </div>
                 </div>
             </div>
-        </x-core::page-container>
+        </x-wara::card>
 
         <div class="flex justify-end">
-            <x-core::button type="submit" label="{{ __('Simpan') }}" />
+            <button type="submit"
+                    class="inline-flex items-center gap-2 rounded-xl bg-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-teal-500/25 transition hover:bg-teal-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900">
+                <x-lucide-save class="size-4" />
+                {{ __('Simpan') }}
+            </button>
         </div>
     </form>
 
@@ -356,18 +387,18 @@
 
             const row = document.createElement('div');
             row.setAttribute('data-route-row', '');
-            row.className = 'flex flex-wrap items-end gap-3 rounded-xl border border-gray-200 p-3 dark:border-gray-700';
+            row.className = 'flex flex-wrap items-end gap-3 rounded-xl border border-gray-100 bg-gray-50/40 p-3 dark:border-white/[0.06] dark:bg-gray-900/40';
             row.innerHTML =
                 '<input type="hidden" name="routes[' + index + '][id]" value="">'
                 + '<div class="w-40">'
                 +   '<label class="block text-xs font-semibold text-gray-700 mb-1.5 dark:text-gray-300">Purpose</label>'
                 +   '<input type="text" name="routes[' + index + '][purpose]" value="" placeholder="notifikasi" '
-                +   'class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent">'
+                +   'class="block w-full py-3 px-4 text-gray-900 placeholder-gray-500 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">'
                 + '</div>'
                 + '<div class="min-w-56 flex-1">'
                 +   '<label class="block text-xs font-semibold text-gray-700 mb-1.5 dark:text-gray-300">Device</label>'
                 +   '<select name="routes[' + index + '][device_id]" '
-                +   'class="block w-full py-3 px-4 text-gray-900 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent">'
+                +   'class="block w-full py-3 px-4 text-gray-900 transition-all duration-200 bg-white border border-gray-300 form-input rounded-xl dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">'
                 +     options
                 +   '</select>'
                 + '</div>'
@@ -380,7 +411,7 @@
                 +   'Webhook'
                 + '</label>'
                 + '<button type="button" onclick="this.closest(\'[data-route-row]\').remove()" '
-                +   'class="inline-flex items-center justify-center gap-x-2 px-6 py-3.5 text-sm font-bold transition-all duration-300 rounded-2xl capitalize text-white border border-transparent bg-linear-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 shadow-lg hover:shadow-red-500/40 focus:ring-red-500 hover:scale-[1.02] active:scale-[0.98]">Hapus</button>';
+                +   'class="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 dark:border-rose-800/40 dark:text-rose-400 dark:hover:bg-rose-900/20">Hapus</button>';
 
             container.appendChild(row);
         };

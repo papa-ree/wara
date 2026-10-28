@@ -1,0 +1,64 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * Katalog template pesan (PRD §16).
+ *
+ * 🔴 Ini BUKAN tabel template Meta. GOWA tidak punya endpoint template, jadi
+ * baris di sini adalah spesifikasi lokal yang dirakit menjadi teks/media saat
+ * dikirim lewat `/send/message` atau `/send/{image,video,file}`.
+ *
+ * Tidak ada `language` (wara bukan WABA multi-bahasa) dan tidak ada `bale_id`
+ * (kepemilikan cukup `user_uuid`, keputusan #36).
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('wara_templates', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+
+            // Pemilik template (guest). Tidak memakai FK ke tabel users supaya
+            // package ini tidak mengunci urutan migrasi aplikasi.
+            $table->uuid('user_uuid')->index();
+
+            $table->string('name');
+
+            // LAYANAN | INFORMASI | OTP (PRD §16.2, keputusan #38).
+            $table->string('category', 32);
+
+            // DRAFT | PENDING | APPROVED | REJECTED (keputusan #37).
+            $table->string('status', 16)->default('DRAFT');
+
+            // POSITIONAL | NAMED (keputusan #39).
+            $table->string('parameter_format', 16)->default('POSITIONAL');
+
+            // HEADER / BODY / FOOTER / BUTTONS. Bentuknya divalidasi
+            // `Support\TemplateValidator`, bukan oleh kolom.
+            $table->json('components');
+
+            // Diisi saat admin menolak. `submitted_at`/`reviewed_*` menyimpan
+            // jejak audit minimal; riwayat lengkap ada di activity log.
+            $table->text('rejection_reason')->nullable();
+            $table->timestamp('submitted_at')->nullable();
+            $table->uuid('reviewed_by')->nullable();
+            $table->timestamp('reviewed_at')->nullable();
+
+            $table->timestamps();
+            $table->softDeletes();
+
+            // Nama unik per pemilik, bukan global: dua user boleh punya
+            // template bernama sama.
+            $table->unique(['user_uuid', 'name']);
+            $table->index(['user_uuid', 'status']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('wara_templates');
+    }
+};

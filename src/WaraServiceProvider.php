@@ -13,10 +13,12 @@ use Bale\Wara\Events\WaraDeviceDisconnected;
 use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Gateways\GowaGateway;
 use Bale\Wara\Listeners\SendDeviceDisconnectedAlert;
+use Bale\Wara\Services\TemplateRenderer;
 use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\Support\PhoneNumber;
 use Bale\Wara\Support\SendPacer;
 use Illuminate\Notifications\ChannelManager;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\ServiceProvider;
@@ -45,6 +47,7 @@ class WaraServiceProvider extends ServiceProvider
             $app->make(PhoneNumber::class),
             $app->make(SendPacer::class),
             $app->make(DeviceRouter::class),
+            $app->make(TemplateRenderer::class),
         ));
 
         // Kanal notifikasi "wara" (PRD §13). Dibuat lewat container supaya
@@ -131,6 +134,7 @@ class WaraServiceProvider extends ServiceProvider
             'wara.send' => 'Mengirim pesan WhatsApp atas nama client (POST /api/v1/wara/send).',
             'wara.routes.read' => 'Membaca peta purpose ke device milik client sendiri.',
             'wara.routes.write' => 'Memetakan purpose ke device milik client sendiri.',
+            'wara.templates.read' => 'Membaca katalog template pesan yang sudah disetujui.',
         ]);
     }
 
@@ -172,6 +176,14 @@ class WaraServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(
             __DIR__.'/../resources/views',
+            'wara'
+        );
+
+        // Komponen visual Bale untuk halaman Wara. Dipisahkan dari
+        // `core` supaya halaman Wara tidak perlu menyalin markup hero/card
+        // berulang kali.
+        Blade::anonymousComponentPath(
+            __DIR__.'/../resources/views/components',
             'wara'
         );
     }

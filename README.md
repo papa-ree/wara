@@ -84,6 +84,28 @@ nama device — nama device bisa diubah lewat dashboard sedangkan JID immutable.
 Jadwal otomatis didaftarkan sendiri saat package boot, jadi worker Laravel
 cukup menjalankan `php artisan schedule:work`.
 
+## API
+
+Dokumentasi API tersedia di panel **Wara > Dokumentasi API** (`/wara/docs`).
+Operator penyewa mendapat versi ringkas di `guest/wara/docs` — hanya endpoint,
+payload, dan contoh respons, tanpa detail gateway maupun scope.
+Ringkasan endpoint:
+
+| Method | Endpoint | Scope | Fungsi |
+|---|---|---|---|
+| `POST` | `/api/v1/wara/send` | `wara.send` | Kirim teks (`message`) atau template (`template` + `parameters`). |
+| `GET` | `/api/v1/wara/templates` | `wara.templates.read` | Katalog template `APPROVED`; filter `category` dan `search`. |
+| `GET` | `/api/v1/wara/routes` | `wara.routes.read` | Daftar pemetaan purpose → device. |
+| `PUT` | `/api/v1/wara/routes` | `wara.routes.write` | Upsert pemetaan purpose → device. |
+| `POST` | `/api/wara/webhook` | — | Receiver webhook GOWA (HMAC). |
+
+Template adalah **katalog lokal**, bukan template Meta — GOWA tidak punya
+endpoint template. Hanya status `APPROVED` yang bisa dikirim lewat API; header
+media memerlukan `header_media_url`; tombol dirender sebagai teks bernomor.
+Template dapat dirujuk lewat UUID atau nama (nama yang dipakai lebih dari satu
+pemilik ditolak `422`). Detail lengkap: halaman `/wara/docs` dan
+`docs/wara/PRD.md` §16.
+
 ## Testing
 
 ```bash

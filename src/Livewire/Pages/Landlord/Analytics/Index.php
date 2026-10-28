@@ -3,7 +3,12 @@
 namespace Bale\Wara\Livewire\Pages\Landlord\Analytics;
 
 use Bale\Wara\Analytics\WaraAnalytics;
+use Bale\Wara\Analytics\WaraFilter;
+use Bale\Wara\Models\WaraClient;
+use Bale\Wara\Models\WaraSession;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Support\Carbon;
+use Livewire\Attributes\Computed;
 use Livewire\Attributes\Layout;
 use Livewire\Attributes\On;
 use Livewire\Attributes\Title;
@@ -13,13 +18,20 @@ use Livewire\Component;
 /**
  * Metrik gateway & router (PRD §14).
  *
- * Sengaja dipisah dari Log Pesan, bukan digabung sebagai tab di sana. Alasannya
- * bukan soal tampilan: Log menjawab "pesan ini milik siapa", Analitik menjawab
- * "apakah gateway-nya sehat". Satu orang sering butuh yang kedua tanpa perlu
- * menggulir log yang thousands baris.
+ * Halaman ini memegang SEMUA state filter:
+ * - `$range`   — preset jam (24/168/720/8760), diabaikan kalau custom range aktif
+ * - `$from`    — tanggal mulai kustom (format Y-m-d)
+ * - `$to`      — tanggal akhir kustom (format Y-m-d)
+ * - `$deviceId`  — filter opsional per device
+ * - `$clientId`  — filter opsional per client (outbound only)
  *
- * 🔴 Halaman ini menampilkan angka agregat, bukan isi pesan. Isi pesan tetap
- * hanya di Log Pesan, dan tetap disamarkan OTP di sana.
+ * WaraFilter dibangun di `filter()` computed property dan diteruskan ke semua
+ * child component sebagai prop `:filter`. Child tidak boleh membangun filter
+ * sendiri supaya tidak ada mismatch antara rentang yang ditampilkan di header
+ * dan rentang yang dipakai di query.
+ *
+ * 🔴 `#[Url]` pada semua filter supaya admin bisa mengirim tautan dengan
+ * semua kondisi filter lengkap ke rekan.
  */
 #[Layout('rakaca::layouts.app')]
 #[Title('Analitik Wara')]
@@ -27,51 +39,118 @@ class Index extends Component
 {
     use AuthorizesRequests;
 
-    /**
-     * Rentang waktu aktif, dalam jam.
-     *
-     * 🔴 Ini satu-satunya sumber kebenaran rentang di halaman. `AnalyticsHeader`
-     * hanya menampilkan tombol dan meneruskan pilihan lewat event; komponen
-     * summary/funnel/breakdown menerima nilainya sebagai atribut.
-     *
-     * `#[Url]` supaya admin bisa mengirim tautan "kejadian jam 3 pagi kemarin"
-     * ke rekan satu tim tanpa menjelaskan rentangnya.
-     */
+    /** Preset rentang waktu dalam jam. Diabaikan kalau $from diisi. */
     #[Url(as: 'range', history: false)]
     public int $range = WaraAnalytics::DEFAULT_RANGE_HOURS;
+
+    /** Tanggal mulai kustom (Y-m-d). Mengaktifkan custom range mode. */
+    #[Url(as: 'from', history: false)]
+    public string $from = '';
+
+    /** Tanggal akhir kustom (Y-m-d). Default: hari ini saat $from diisi. */
+    #[Url(as: 'to', history: false)]
+    public string $to = '';
+
+    /** Filter opsional per device_id. */
+    #[Url(as: 'device', history: false)]
+    public string $deviceId = '';
+
+    /** Filter opsional per client_id (outbound only). */
+    #[Url(as: 'client', history: false)]
+    public string $clientId = '';
 
     public function mount(): void
     {
         $this->authorize('wara.log.read');
 
         $this->range = $this->normalizeRange($this->range);
+        $this->from = $this->normalizeDate($this->from);
+        $this->to = $this->normalizeDate($this->to);
     }
 
     /**
-     * Menerima pilihan rentang dari `AnalyticsHeader`.
+     * WaraFilter yang dipakai semua child component.
      *
-     * 🔴 Guard ada di sini juga, bukan hanya di `updatedRange()`. Event Livewire
-     * bisa dikirim dari mana saja, termasuk request yang direkam pihak ketiga,
-     * jadi nilai tetap harus divalidasi di pintu yang sama.
+     * 🔴 Computed property (bukan prop publik) supaya child tidak bisa
+     * memodifikasinya — hanya Index yang memegang state filter.
+     */
+    #[Computed]
+    public function filter(): WaraFilter
+    {
+        $from = $this->from !== '' ? Carbon::parse($this->from) : null;
+        $to = $this->to !== '' ? Carbon::parse($this->to) : null;
+
+        // Kalau custom range, from wajib < to. Kalau tidak valid, fallback ke preset.
+        if ($from !== null && $to !== null && $from->gt($to)) {
+            $from = null;
+            $to = null;
+        }
+
+        return new WaraFilter(
+            hours: $this->range,
+            from: $from,
+            until: $to,
+            deviceId: $this->deviceId !== '' ? $this->deviceId : null,
+            clientId: $this->clientId !== '' ? $this->clientId : null,
+        );
+    }
+
+    /**
+     * Key unik yang berubah setiap kali filter berubah.
+     * Dipakai untuk memaksa remount child component (agar query diulang dari nol).
+     */
+    public function filterKey(): string
+    {
+        return md5($this->range.$this->from.$this->to.$this->deviceId.$this->clientId);
+    }
+
+    /**
+     * Menerima pilihan preset range dari AnalyticsHeader.
+     * Sekaligus reset custom date range.
      */
     #[On('analytics-range-changed')]
     public function selectRange(int $range): void
     {
         $this->range = $this->normalizeRange($range);
+        $this->from = '';
+        $this->to = '';
     }
 
     /**
-     * 🔴 Nilai dari query string bisa apa saja — termasuk yang tidak ada di
-     * `RANGES`. Tanpa guard ini, `?range=0` akan sampai ke `now()->subHours(0)`
-     * dan menggambar funnel dengan lebar bucket yang membagi dengan nol.
-     *
-     * Sengaja fallback, bukan `validate()`: URL jelek tidak boleh membuat admin
-     * melihat halaman error, dan tidak ada data yang perlu dilindungi di sini —
-     * nilainya hanya memilih rentang baca.
+     * Menerima custom date range dari AnalyticsHeader.
      */
+    #[On('analytics-custom-range')]
+    public function setCustomRange(string $from, string $to): void
+    {
+        $this->from = $this->normalizeDate($from);
+        $this->to = $this->normalizeDate($to);
+    }
+
+    /**
+     * Reset hanya filter device dan client (bukan periode).
+     */
+    #[On('analytics-filters-changed')]
+    public function setFilters(string $deviceId = '', string $clientId = ''): void
+    {
+        $this->deviceId = $deviceId;
+        $this->clientId = $clientId;
+    }
+
     public function updatedRange(): void
     {
         $this->range = $this->normalizeRange($this->range);
+        $this->from = '';
+        $this->to = '';
+    }
+
+    public function updatedFrom(): void
+    {
+        $this->from = $this->normalizeDate($this->from);
+    }
+
+    public function updatedTo(): void
+    {
+        $this->to = $this->normalizeDate($this->to);
     }
 
     protected function normalizeRange(int $range): int
@@ -81,8 +160,40 @@ class Index extends Component
             : WaraAnalytics::DEFAULT_RANGE_HOURS;
     }
 
+    /**
+     * Validasi dan normalisasi string tanggal (Y-m-d).
+     *
+     * 🔴 Input dari URL/event bisa apa saja. Tanggal yang tidak valid
+     * di-reset ke string kosong, bukan menyebabkan exception di Carbon::parse().
+     */
+    protected function normalizeDate(string $date): string
+    {
+        if ($date === '') {
+            return '';
+        }
+
+        try {
+            $parsed = Carbon::createFromFormat('Y-m-d', $date);
+
+            return $parsed !== false ? $parsed->format('Y-m-d') : '';
+        } catch (\Exception) {
+            return '';
+        }
+    }
+
     public function render()
     {
-        return view('wara::livewire.pages.landlord.analytics.index');
+        $devices = WaraSession::query()
+            ->orderBy('display_name')
+            ->get(['device_id', 'display_name']);
+
+        $clients = WaraClient::query()
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        return view('wara::livewire.pages.landlord.analytics.index', [
+            'devices' => $devices,
+            'clients' => $clients,
+        ]);
     }
 }

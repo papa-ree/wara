@@ -31,6 +31,16 @@ return [
                     'table' => 'wara_sessions',
                 ],
                 [
+                    // Antrean review template guest. Diletakkan setelah Device
+                    // karena keputusan template bergantung pada device mana
+                    // yang akan mengirimnya.
+                    'label' => 'Template',
+                    'url' => 'wara/template',
+                    'icon' => 'file-text',
+                    'permission' => 'wara.template.read',
+                    'table' => 'wara_templates',
+                ],
+                [
                     'label' => 'Log Pesan',
                     'url' => 'wara/log',
                     'icon' => 'message-square',

@@ -3,29 +3,26 @@
 namespace Bale\Wara\Livewire\Pages\Landlord\Analytics\Section;
 
 use Bale\Wara\Analytics\WaraAnalytics;
+use Bale\Wara\Analytics\WaraFilter;
 use Livewire\Component;
 
 /**
- * Tabel per-client, per-device, dan reliability fan-out.
- *
- * Satu komponen untuk tiga tabel, bukan tiga komponen. Alasannya bentuknya
- * sama: daftar agregat dengan baris yang bisa dihitung manual dari query yang
- * sama. Memisahkannya jadi tiga file Livewire hanya menambah tempat untuk
- * lupa menyinkronkan `range`.
+ * Daftar per-client, per-device, pesan masuk per pengirim, dan reliability fan-out.
  */
 class AnalyticsBreakdown extends Component
 {
-    public int $range = WaraAnalytics::DEFAULT_RANGE_HOURS;
+    public WaraFilter $filter;
 
     public function render()
     {
         $analytics = new WaraAnalytics;
 
         return view('wara::livewire.pages.landlord.analytics.section.analytics-breakdown', [
-            'byClient' => $analytics->outboundByClient($this->range),
-            'byDevice' => $analytics->trafficByDevice($this->range),
-            'inboundBySender' => $analytics->inboundBySender($this->range),
-            'fanOut' => $analytics->fanOutByEndpoint($this->range),
+            'byClient' => $analytics->filteredOutboundByClient($this->filter),
+            'byDevice' => $analytics->filteredTrafficByDevice($this->filter),
+            'inboundBySender' => $analytics->filteredInboundBySender($this->filter),
+            'fanOut' => $analytics->filteredFanOutByEndpoint($this->filter),
+            'rangeLabel' => $this->filter->label(),
         ]);
     }
 }

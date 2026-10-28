@@ -1,5 +1,6 @@
 <?php
 
+use Bale\Wara\Exceptions\CooldownException;
 use Bale\Wara\Exceptions\TooManyAttemptsException;
 use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Models\WaraLog;
@@ -77,6 +78,41 @@ describe('cooldown per nomor (§8.2)', function () {
         // Dua request terkirim, tapi keduanya tercatat — tidak ada error.
         Http::assertSentCount(2);
         expect(WaraLog::query()->count())->toBe(2);
+    });
+
+    it('melempar CooldownException bila sisa cooldown melewati batas tunggu', function () {
+        fakeGatewaySuccess();
+        config()->set('wara.cooldown_seconds', 60);
+        config()->set('wara.max_blocking_wait_seconds', 5);
+
+        $this->manager->sendMessage('628123456789', 'pertama');
+
+        try {
+            $this->manager->sendMessage('628123456789', 'kedua');
+            $this->fail('Pengiriman kedua seharusnya melempar CooldownException.');
+        } catch (CooldownException $e) {
+            // Sisa hampir 60 detik: jauh di atas batas tunggu, jadi proses
+            // tidak boleh ditahan sampai `max_execution_time` habis.
+            expect($e->retryAfter)->toBeGreaterThan(0)
+                ->and($e->retryAfter)->toBeLessThanOrEqual(60)
+                ->and($e->maxBlockingSeconds)->toBe(5);
+        }
+
+        Http::assertSentCount(1);
+        expect(WaraLog::query()->count())->toBe(1);
+    });
+
+    it('batas tunggu 0 berarti tidak pernah menahan proses', function () {
+        fakeGatewaySuccess();
+        config()->set('wara.cooldown_seconds', 60);
+        config()->set('wara.max_blocking_wait_seconds', 0);
+
+        $this->manager->sendMessage('628123456789', 'pertama');
+
+        expect(fn () => $this->manager->sendMessage('628123456789', 'kedua'))
+            ->toThrow(CooldownException::class);
+
+        Http::assertSentCount(1);
     });
 
     it('nomor berbeda tidak saling memengaruhi', function () {

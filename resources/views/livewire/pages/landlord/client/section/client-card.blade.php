@@ -27,10 +27,10 @@
         <div class="mt-2 flex flex-wrap gap-1.5">
             @forelse ($record->routes->sortBy('purpose') as $route)
                 <span wire:key="wara-client-card-route-{{ $route->getKey() }}"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border
+                    class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs
                         {{ $route->outbound_enabled
-                            ? 'bg-gray-100 text-gray-700 border-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700'
-                            : 'bg-red-50 text-red-700 border-red-100 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/40' }}">
+                            ? 'border-teal-100 bg-teal-50 text-teal-700 dark:border-teal-800/40 dark:bg-teal-900/20 dark:text-teal-300'
+                            : 'border-rose-100 bg-rose-50 text-rose-700 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-400' }}">
                     <span class="font-mono">{{ $route->purpose }}</span>
                     <span class="text-gray-400 dark:text-gray-500" aria-hidden="true">&rarr;</span>
                     <span class="font-mono">{{ $route->device_id }}</span>

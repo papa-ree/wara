@@ -7,7 +7,10 @@ use Bale\Wara\Data\DeviceInfo;
 use Bale\Wara\Data\DeviceList;
 use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Data\DeviceStatus;
+use Bale\Wara\Data\PairingCode;
+use Bale\Wara\Data\QrLogin;
 use Bale\Wara\Data\SendResult;
+use Bale\Wara\Data\WebhookConfig;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\GatewayException;
 use Illuminate\Http\Client\PendingRequest;
@@ -56,6 +59,55 @@ class GowaGateway implements WaraGateway
         );
     }
 
+    public function sendImage(string $deviceId, string $phone, string $imageUrl, ?string $caption = null): SendResult
+    {
+        return $this->sendMedia('/send/image', 'image_url', $imageUrl, $deviceId, $phone, $caption);
+    }
+
+    public function sendVideo(string $deviceId, string $phone, string $videoUrl, ?string $caption = null): SendResult
+    {
+        return $this->sendMedia('/send/video', 'video_url', $videoUrl, $deviceId, $phone, $caption);
+    }
+
+    public function sendDocument(string $deviceId, string $phone, string $fileUrl, ?string $caption = null): SendResult
+    {
+        return $this->sendMedia('/send/file', 'file_url', $fileUrl, $deviceId, $phone, $caption);
+    }
+
+    /**
+     * Endpoint media GOWA memakai `multipart/form-data`, bukan JSON.
+     *
+     * Kita mengirim URL (`*_url`), bukan binary: file sudah disimpan di disk
+     * Bale (konvensi bale-core), jadi gateway yang mengunduh.
+     */
+    protected function sendMedia(
+        string $path,
+        string $urlField,
+        string $mediaUrl,
+        string $deviceId,
+        string $phone,
+        ?string $caption,
+    ): SendResult {
+        $response = $this->request()
+            ->asMultipart()
+            ->withHeaders([self::DEVICE_HEADER => $deviceId])
+            ->post($path, [
+                'phone' => $phone.self::JID_SUFFIX,
+                $urlField => $mediaUrl,
+                'caption' => (string) ($caption ?? ''),
+            ]);
+
+        $this->throwForError($response->status(), $response->body(), $deviceId);
+
+        $decoded = $this->decode($response->body());
+
+        return SendResult::accepted(
+            messageId: $this->stringOrNull(data_get($decoded, 'results.message_id')
+                ?? data_get($decoded, 'message_id')),
+            status: 'accepted'
+        );
+    }
+
     /**
      * Apakah nilai ini JID akun device milik GOWA?
      *
@@ -82,6 +134,111 @@ class GowaGateway implements WaraGateway
         $devices = $this->extractDeviceRows($decoded);
 
         return new DeviceList($devices->map(fn (array $row) => $this->toDeviceInfo($row)));
+    }
+
+    public function addDevice(?string $sessionId = null, ?WebhookConfig $webhook = null): DeviceInfo
+    {
+        $payload = filled($sessionId) ? ['device_id' => $sessionId] : [];
+
+        if ($webhook !== null) {
+            $payload += $this->webhookPayload($webhook);
+        }
+
+        $response = $this->request()->post('/devices', $payload);
+
+        $this->throwForError($response->status(), $response->body());
+
+        $decoded = $this->decode($response->body());
+
+        return $this->toDeviceInfo((array) ($decoded['results'] ?? $decoded));
+    }
+
+    public function loginQr(string $sessionId): QrLogin
+    {
+        $response = $this->request()->get('/devices/'.rawurlencode($sessionId).'/login');
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+
+        $decoded = $this->decode($response->body());
+        $results = (array) ($decoded['results'] ?? $decoded);
+
+        $qrLink = $this->stringOrNull($results['qr_link'] ?? null);
+
+        if ($qrLink === null) {
+            throw GatewayException::malformedResponse($this->endpoint(), 'respons login tidak memuat QR');
+        }
+
+        return new QrLogin(
+            deviceId: (string) ($results['device_id'] ?? $sessionId),
+            expiresInSeconds: (int) ($results['qr_duration'] ?? 0),
+            imageDataUri: $this->toDataUri($qrLink),
+        );
+    }
+
+    public function loginWithCode(string $sessionId, string $phone): PairingCode
+    {
+        $response = $this->request()
+            ->post('/devices/'.rawurlencode($sessionId).'/login/code?phone='.rawurlencode($phone));
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+
+        $decoded = $this->decode($response->body());
+        $results = (array) ($decoded['results'] ?? $decoded);
+
+        $code = $this->stringOrNull($results['pair_code'] ?? null);
+
+        if ($code === null) {
+            throw GatewayException::malformedResponse($this->endpoint(), 'respons pairing tidak memuat kode');
+        }
+
+        return new PairingCode(
+            deviceId: (string) ($results['device_id'] ?? $sessionId),
+            code: $code,
+        );
+    }
+
+    public function reconnect(string $sessionId): void
+    {
+        $response = $this->request()->post('/devices/'.rawurlencode($sessionId).'/reconnect');
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+    }
+
+    public function logout(string $sessionId): void
+    {
+        $response = $this->request()->post('/devices/'.rawurlencode($sessionId).'/logout');
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+    }
+
+    public function removeDevice(string $sessionId): void
+    {
+        $response = $this->request()->delete('/devices/'.rawurlencode($sessionId));
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+    }
+
+    public function getWebhook(string $sessionId): WebhookConfig
+    {
+        $response = $this->request()->get('/devices/'.rawurlencode($sessionId).'/webhook');
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+
+        $decoded = $this->decode($response->body());
+
+        return $this->toWebhookConfig((array) ($decoded['results'] ?? $decoded));
+    }
+
+    public function setWebhook(string $sessionId, WebhookConfig $webhook): WebhookConfig
+    {
+        $response = $this->request()
+            ->patch('/devices/'.rawurlencode($sessionId).'/webhook', $this->webhookPayload($webhook));
+
+        $this->throwForError($response->status(), $response->body(), $sessionId);
+
+        $decoded = $this->decode($response->body());
+
+        return $this->toWebhookConfig((array) ($decoded['results'] ?? $decoded));
     }
 
     public function deviceStatus(string $deviceId): DeviceStatus
@@ -240,6 +397,70 @@ class GowaGateway implements WaraGateway
             jid: $this->stringOrNull($row['jid'] ?? null),
             displayName: $this->stringOrNull($row['display_name'] ?? $row['name'] ?? null),
             state: $this->toState($this->stringOrNull($row['state'] ?? null)),
+        );
+    }
+
+    protected function endpoint(): string
+    {
+        return rtrim((string) config('wara.endpoint'), '/');
+    }
+
+    /**
+     * Unduh gambar QR di sisi server dan ubah jadi data-URI (keputusan #29).
+     *
+     * 🔴 Kalau URL gateway dikirim ke browser, dua hal rusak sekaligus:
+     * invariant §11.2 (host gateway bocor) dan deployment dengan jaringan
+     * tertutup (browser admin tidak bisa menjangkau host itu).
+     */
+    protected function toDataUri(string $link): string
+    {
+        if (str_starts_with($link, 'data:')) {
+            return $link;
+        }
+
+        if (! str_starts_with($link, 'http://') && ! str_starts_with($link, 'https://')) {
+            $link = $this->endpoint().'/'.ltrim($link, '/');
+        }
+
+        $response = Http::timeout((int) config('wara.timeout', 20))->get($link);
+
+        if (! $response->successful() || $response->body() === '') {
+            throw GatewayException::requestFailed($link, $response->status());
+        }
+
+        return 'data:image/png;base64,'.base64_encode($response->body());
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function webhookPayload(WebhookConfig $webhook): array
+    {
+        $payload = [
+            'webhook_url' => (string) ($webhook->url ?? ''),
+            'webhook_events' => array_values($webhook->events),
+            'webhook_insecure_skip_verify' => $webhook->insecureSkipVerify,
+        ];
+
+        // 🔴 Secret kosong berarti "jangan diubah". Mengirim string kosong
+        // akan MENGHAPUS secret yang sudah terpasang di gateway, dan webhook
+        // penerima langsung menolak semua event tanpa error yang terlihat.
+        if (filled($webhook->secret)) {
+            $payload['webhook_secret'] = $webhook->secret;
+        }
+
+        return $payload;
+    }
+
+    protected function toWebhookConfig(array $results): WebhookConfig
+    {
+        $events = $results['webhook_events'] ?? [];
+
+        return new WebhookConfig(
+            url: $this->stringOrNull($results['webhook_url'] ?? null),
+            secret: $this->stringOrNull($results['webhook_secret'] ?? null),
+            events: is_array($events) ? array_values(array_map('strval', $events)) : [],
+            insecureSkipVerify: (bool) ($results['webhook_insecure_skip_verify'] ?? false),
         );
     }
 

@@ -3,24 +3,24 @@
 namespace Bale\Wara\Livewire\Pages\Landlord\Analytics\Section;
 
 use Bale\Wara\Analytics\WaraAnalytics;
+use Bale\Wara\Analytics\WaraFilter;
 use Livewire\Component;
 
 /**
- * Judul halaman + pemilih rentang waktu.
+ * Judul halaman + pemilih rentang waktu dan filter device/client.
  *
- * 🔴 `$range` di sini BUKAN sumber kebenaran. Nilai itu milik `Index`; komponen
- * ini menerima salinannya untuk menandai tombol aktif, lalu meneruskan pilihan
- * admin lewat event. Kalau header yang memegang `$range`, setiap grafik di bawah
- * perlu menggambar ulang dengan sendirinya saat tombol ditekan.
+ * 🔴 `$filter` di sini adalah READ-ONLY prop dari `Index`. Komponen ini
+ * hanya menampilkan state aktif dan mendispatch event ke atas. Tidak boleh
+ * menyimpan state filter sendiri — kalau ada, ada dua sumber kebenaran.
  */
 class AnalyticsHeader extends Component
 {
-    public int $range = WaraAnalytics::DEFAULT_RANGE_HOURS;
+    public WaraFilter $filter;
 
     public function render()
     {
         return view('wara::livewire.pages.landlord.analytics.section.analytics-header', [
-            'ranges' => WaraAnalytics::RANGES,
+            'ranges' => WaraAnalytics::rangeOptions(),
         ]);
     }
 }

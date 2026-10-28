@@ -1,6 +1,10 @@
 <?php
 
 use Bale\Wara\Http\Controllers\ClientController;
+use Bale\Wara\Http\Middleware\EnsureWaraService;
+use Bale\Wara\Livewire\Pages\Guest\Docs\Index as GuestDocsIndex;
+use Bale\Wara\Livewire\Pages\Guest\Template\Form as GuestTemplateForm;
+use Bale\Wara\Livewire\Pages\Guest\Template\Index as GuestTemplateIndex;
 use Bale\Wara\Livewire\Pages\Landlord\Analytics\Index as AnalyticsIndex;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Form as ClientForm;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Index as ClientIndex;
@@ -9,6 +13,8 @@ use Bale\Wara\Livewire\Pages\Landlord\Device\Index;
 use Bale\Wara\Livewire\Pages\Landlord\Docs\Index as DocsIndex;
 use Bale\Wara\Livewire\Pages\Landlord\Log\Index as LogIndex;
 use Bale\Wara\Livewire\Pages\Landlord\Status\Index as StatusIndex;
+use Bale\Wara\Livewire\Pages\Landlord\Template\Index as TemplateIndex;
+use Bale\Wara\Livewire\Pages\Landlord\Template\Review as TemplateReview;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -67,6 +73,14 @@ Route::middleware(['web', 'auth'])->prefix('wara')->name('wara.')->group(functio
         ->name('log.index')
         ->middleware('can:wara.log.read');
 
+    Route::get('/template', TemplateIndex::class)
+        ->name('template.index')
+        ->middleware('can:wara.template.read');
+
+    Route::get('/template/{template}', TemplateReview::class)
+        ->name('template.review')
+        ->middleware('can:wara.template.review');
+
     Route::get('/docs', DocsIndex::class)
         ->name('docs.index')
         ->middleware('can:wara.client.read');
@@ -75,3 +89,35 @@ Route::middleware(['web', 'auth'])->prefix('wara')->name('wara.')->group(functio
         ->name('status.index')
         ->middleware('can:wara.status.read');
 });
+
+/*
+|--------------------------------------------------------------------------
+| Panel Guest Wara
+|--------------------------------------------------------------------------
+|
+| Diakses operator organisasi penyewa. Akses ditentukan relasi layanan
+| `wara`, bukan permission admin (PRD §16.5).
+|
+| 🔴 Tidak ada route kirim pesan di sini. Panel guest hanya menyusun dan
+| melihat status template; pengiriman hanya lewat API.
+|
+*/
+
+Route::middleware(['web', 'auth', EnsureWaraService::class])
+    ->prefix('guest/wara')
+    ->name('wara.guest.')
+    ->group(function () {
+        Route::get('/template', GuestTemplateIndex::class)
+            ->name('template.index');
+
+        Route::get('/template/create', GuestTemplateForm::class)
+            ->name('template.create');
+
+        Route::get('/template/{template}/edit', GuestTemplateForm::class)
+            ->name('template.edit');
+
+        // Panduan API ringkas. Isinya hanya endpoint + payload; scope token dan
+        // detail gateway sengaja tidak ditampilkan (lihat komponennya).
+        Route::get('/docs', GuestDocsIndex::class)
+            ->name('docs.index');
+    });
