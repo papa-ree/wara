@@ -131,22 +131,29 @@ describe('pencatatan event (PRD §6.2)', function () {
             ->and($log->body)->toBe('Kode OTP saya 123456');
     });
 
-    it('mencatat message.ack beserta receipt type', function () {
+    it('mencatat message.ack per id beserta chat dan receipt type', function () {
         $body = json_encode([
             'event' => 'message.ack',
             'device_id' => 'org_2',
-            'payload' => ['message_id' => 'msg-1', 'receipt_type' => 'delivered'],
+            'payload' => [
+                'ids' => ['msg-1', 'msg-2'],
+                'chat_id' => '628999888777@s.whatsapp.net',
+                'receipt_type' => 'read',
+            ],
         ]);
 
         $this->postJson('/api/wara/webhook', json_decode($body, true), [
             'X-Hub-Signature-256' => signBody($body),
         ])->assertOk();
 
-        $log = WaraLog::query()->first();
+        $logs = WaraLog::query()->orderBy('message_id')->get();
 
-        expect($log->event)->toBe('message.ack')
-            ->and($log->status)->toBe('delivered')
-            ->and($log->message_id)->toBe('msg-1');
+        expect($logs)->toHaveCount(2)
+            ->and($logs[0]->event)->toBe('message.ack')
+            ->and($logs[0]->status)->toBe('read')
+            ->and($logs[0]->message_id)->toBe('msg-1')
+            ->and($logs[1]->message_id)->toBe('msg-2')
+            ->and($logs[0]->chat_id)->toBe('628999888777@s.whatsapp.net');
     });
 
     it('mencatat event lain lalu mengabaikan logikanya', function () {

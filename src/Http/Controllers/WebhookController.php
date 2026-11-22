@@ -4,6 +4,7 @@ namespace Bale\Wara\Http\Controllers;
 
 use Bale\Wara\Contracts\WaraGateway;
 use Bale\Wara\Events\WaraIncomingMessage;
+use Bale\Wara\Events\WaraMessageAck;
 use Bale\Wara\Jobs\DeliverToConsumer;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraRoute;
@@ -76,6 +77,7 @@ class WebhookController
         //   - gagal di dalam try/catch => bukti inbound tetap ada di wara_logs;
         //   - 500 => GOWA mengirim ulang event yang sama tanpa ada efek apa pun.
         $this->dispatchIncomingEvent($rawBody, $event, $deviceId, $data);
+        $this->dispatchAckEvent($event, $deviceId, $data);
 
         return response()->json([
             'ok' => true,
@@ -114,6 +116,10 @@ class WebhookController
                 $this->stringOrNull($data['body'] ?? null),
                 $rawBody,
                 $this->resolveReceivedAt($data),
+                $this->mediaFromPayload($data),
+                (bool) ($data['is_from_me'] ?? false),
+                $this->stringOrNull($data['replied_to_id'] ?? null),
+                $this->stringOrNull($data['quoted_body'] ?? null),
             );
         } catch (\Throwable $e) {
             Log::error('Wara: gagal dispatch WaraIncomingMessage.', [
@@ -122,6 +128,84 @@ class WebhookController
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Pancarkan bukti terkirim/dibaca ke consumer dalam proses yang sama.
+     *
+     * Sama seperti event pesan: dikirim sesudah `wara_logs` tersimpan, dan
+     * kegagalan listener tidak boleh mengubah 200 menjadi 500.
+     *
+     * @param  array<string, mixed>  $data  isi `payload` dari event
+     */
+    protected function dispatchAckEvent(string $event, ?string $deviceId, array $data): void
+    {
+        if ($event !== self::EVENT_MESSAGE_ACK || $deviceId === null) {
+            return;
+        }
+
+        $ids = array_values(array_filter(
+            (array) ($data['ids'] ?? []),
+            fn ($id) => is_string($id) && $id !== '',
+        ));
+
+        if ($ids === []) {
+            return;
+        }
+
+        $chatId = $this->stringOrNull($data['chat_id'] ?? null);
+
+        try {
+            WaraMessageAck::dispatch(
+                $deviceId,
+                $ids,
+                $this->stringOrNull($data['receipt_type'] ?? null),
+                $chatId,
+                $this->stripJid($chatId),
+            );
+        } catch (\Throwable $e) {
+            Log::error('Wara: gagal dispatch WaraMessageAck.', [
+                'event' => $event,
+                'device_id' => $deviceId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Ambil media dari payload webhook dan samakan bentuknya.
+     *
+     * GOWA memakai bentuk berbeda-beda tergantung `WHATSAPP_AUTO_DOWNLOAD_MEDIA`
+     * dan ada/tidaknya caption: string path, `{path, caption}`, `{url, caption}`,
+     * atau `{url, filename}`. Consumer tidak boleh melihat perbedaan itu.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{type: string, filename: ?string, caption: ?string, path: ?string, url: ?string}|null
+     */
+    protected function mediaFromPayload(array $data): ?array
+    {
+        foreach (['image', 'video', 'audio', 'document', 'sticker'] as $type) {
+            $raw = $data[$type] ?? null;
+
+            if ($raw === null || $raw === '') {
+                continue;
+            }
+
+            $meta = is_array($raw) ? $raw : [];
+            $path = is_string($raw) ? $raw : $this->stringOrNull($meta['path'] ?? null);
+            $filename = $this->stringOrNull($meta['filename'] ?? null)
+                ?? ($path !== null ? basename(str_replace('\\', '/', $path)) : null);
+
+            return [
+                'type' => $type,
+                'filename' => $filename,
+                'caption' => $this->stringOrNull($meta['caption'] ?? null),
+                'path' => $path,
+                'url' => $this->stringOrNull($meta['url'] ?? null),
+            ];
+        }
+
+        return null;
     }
 
     /**
@@ -207,13 +291,30 @@ class WebhookController
      */
     protected function recordAck(?string $deviceId, array $data): bool
     {
-        WaraLog::query()->create([
-            'direction' => 'in',
-            'event' => self::EVENT_MESSAGE_ACK,
-            'device_id' => $deviceId,
-            'message_id' => $this->stringOrNull($data['message_id'] ?? $data['id'] ?? null),
-            'status' => $this->stringOrNull($data['receipt_type'] ?? null),
-        ]);
+        // GOWA mengirim daftar id (`ids[]`), bukan satu `message_id`; ack bisa
+        // berlaku untuk beberapa pesan sekaligus.
+        $ids = array_values(array_filter(
+            (array) ($data['ids'] ?? []),
+            fn ($id) => is_string($id) && $id !== '',
+        ));
+
+        if ($ids === []) {
+            $ids = [$this->stringOrNull($data['message_id'] ?? $data['id'] ?? null)];
+        }
+
+        $status = $this->stringOrNull($data['receipt_type'] ?? null);
+        $chatId = $this->stringOrNull($data['chat_id'] ?? null);
+
+        foreach ($ids as $id) {
+            WaraLog::query()->create([
+                'direction' => 'in',
+                'event' => self::EVENT_MESSAGE_ACK,
+                'device_id' => $deviceId,
+                'chat_id' => $chatId,
+                'message_id' => $id,
+                'status' => $status,
+            ]);
+        }
 
         return true;
     }
@@ -343,8 +444,12 @@ class WebhookController
         }
 
         $atPosition = strpos($value, '@');
+        $user = $atPosition === false ? $value : substr($value, 0, $atPosition);
 
-        return $atPosition === false ? $value : substr($value, 0, $atPosition);
+        // JID multi-device membawa sufiks `:12`; bukan bagian nomor.
+        $colon = strpos($user, ':');
+
+        return $colon === false ? $user : substr($user, 0, $colon);
     }
 
     protected function stringOrNull(mixed $value): ?string

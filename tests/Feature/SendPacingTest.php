@@ -1,8 +1,8 @@
 <?php
 
+use Bale\Wara\Exceptions\BackoffException;
 use Bale\Wara\Exceptions\CooldownException;
 use Bale\Wara\Exceptions\TooManyAttemptsException;
-use Bale\Wara\Exceptions\WaraException;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\Support\SendPacer;
@@ -282,8 +282,14 @@ describe('backoff device (§8.2)', function () {
     it('device dalam backoff ditolak tanpa mencoba ke gateway', function () {
         $this->pacer->markDeviceBackoff('wago prod');
 
-        expect(fn () => $this->manager->sendMessage('628123456789', 'a'))
-            ->toThrow(WaraException::class, 'backoff');
+        try {
+            $this->manager->sendMessage('628123456789', 'a');
+            $this->fail('pengiriman seharusnya ditolak');
+        } catch (BackoffException $e) {
+            // Sisa detik wajib ikut, supaya pemanggil bisa menjadwalkan ulang
+            // alih-alih menghabiskan tries.
+            expect($e->retryAfter)->toBeBetween(1, 300);
+        }
 
         Http::assertNothingSent();
     });

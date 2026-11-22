@@ -2,9 +2,12 @@
 
 namespace Bale\Wara\Contracts;
 
+use Bale\Wara\Data\ChatMessage;
+use Bale\Wara\Data\ChatSummary;
 use Bale\Wara\Data\DeviceInfo;
 use Bale\Wara\Data\DeviceList;
 use Bale\Wara\Data\DeviceStatus;
+use Bale\Wara\Data\DownloadedMedia;
 use Bale\Wara\Data\PairingCode;
 use Bale\Wara\Data\QrLogin;
 use Bale\Wara\Data\SendResult;
@@ -12,6 +15,8 @@ use Bale\Wara\Data\WebhookConfig;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\DeviceNotReadyException;
 use Bale\Wara\Exceptions\GatewayException;
+use DateTimeInterface;
+use Illuminate\Support\Collection;
 
 /**
  * Batas yang memisahkan Bale dari gateway WhatsApp (PRD §11.2).
@@ -36,7 +41,12 @@ interface WaraGateway
      * @throws DeviceNotFoundException
      * @throws GatewayException
      */
-    public function sendText(string $deviceId, string $phone, string $text): SendResult;
+    public function sendText(
+        string $deviceId,
+        string $phone,
+        string $text,
+        ?string $replyToMessageId = null,
+    ): SendResult;
 
     /**
      * Kirim gambar dari URL.
@@ -44,7 +54,13 @@ interface WaraGateway
      * Dipakai template ber-header IMAGE (PRD §16.7). Caption membawa body
      * template yang sudah dirakit.
      */
-    public function sendImage(string $deviceId, string $phone, string $imageUrl, ?string $caption = null): SendResult;
+    public function sendImage(
+        string $deviceId,
+        string $phone,
+        string $imageUrl,
+        ?string $caption = null,
+        ?string $replyToMessageId = null,
+    ): SendResult;
 
     /**
      * Kirim video dari URL (template ber-header VIDEO).
@@ -54,7 +70,87 @@ interface WaraGateway
     /**
      * Kirim dokumen dari URL (template ber-header DOCUMENT).
      */
-    public function sendDocument(string $deviceId, string $phone, string $fileUrl, ?string $caption = null): SendResult;
+    public function sendDocument(
+        string $deviceId,
+        string $phone,
+        string $fileUrl,
+        ?string $caption = null,
+        ?string $replyToMessageId = null,
+    ): SendResult;
+
+    /**
+     * Kirim audio dari URL. GOWA tidak punya field caption untuk audio.
+     */
+    public function sendAudio(
+        string $deviceId,
+        string $phone,
+        string $audioUrl,
+        ?string $caption = null,
+        ?string $replyToMessageId = null,
+    ): SendResult;
+
+    /**
+     * Unduh isi media sebuah pesan masuk dari gateway.
+     *
+     * NULL bila pesan itu tidak punya media yang bisa diunduh.
+     *
+     * @throws DeviceNotFoundException
+     * @throws GatewayException
+     */
+    public function downloadMedia(string $deviceId, string $messageId, string $phone): ?DownloadedMedia;
+
+    /**
+     * Tandai pesan masuk sudah dibaca di WhatsApp (kirim read receipt).
+     *
+     * @throws DeviceNotFoundException
+     * @throws GatewayException
+     */
+    public function markRead(string $deviceId, string $messageId, string $phone): void;
+
+    /**
+     * Tarik pesan yang sudah terkirim dari semua peserta ("hapus untuk semua").
+     *
+     * Hanya berlaku untuk pesan milik device ini dan dalam batas waktu yang
+     * ditetapkan WhatsApp; di luar itu gateway membalas error.
+     *
+     * @throws DeviceNotFoundException
+     * @throws GatewayException
+     */
+    public function revokeMessage(string $deviceId, string $messageId, string $phone): void;
+
+    /**
+     * Hapus pesan hanya dari sisi akun ini ("hapus untuk saya").
+     *
+     * @throws DeviceNotFoundException
+     * @throws GatewayException
+     */
+    public function deleteMessage(string $deviceId, string $messageId, string $phone): void;
+
+    /**
+     * Daftar percakapan yang tersimpan di chat storage gateway.
+     *
+     * @return Collection<int, ChatSummary>
+     *
+     * @throws GatewayException
+     */
+    public function chats(string $deviceId, int $limit = 100, int $offset = 0): Collection;
+
+    /**
+     * Pesan tersimpan pada satu percakapan, terbaru lebih dulu.
+     *
+     * `$since` membatasi umur pesan; NULL berarti semua yang ada di gateway.
+     *
+     * @return Collection<int, ChatMessage>
+     *
+     * @throws GatewayException
+     */
+    public function chatMessages(
+        string $deviceId,
+        string $phone,
+        ?DateTimeInterface $since = null,
+        int $limit = 100,
+        int $offset = 0,
+    ): Collection;
 
     /**
      * Apakah nilai ini adalah JID akun device, bukan nama device.

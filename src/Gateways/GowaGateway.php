@@ -3,19 +3,25 @@
 namespace Bale\Wara\Gateways;
 
 use Bale\Wara\Contracts\WaraGateway;
+use Bale\Wara\Data\ChatMessage;
+use Bale\Wara\Data\ChatSummary;
 use Bale\Wara\Data\DeviceInfo;
 use Bale\Wara\Data\DeviceList;
 use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Data\DeviceStatus;
+use Bale\Wara\Data\DownloadedMedia;
 use Bale\Wara\Data\PairingCode;
 use Bale\Wara\Data\QrLogin;
 use Bale\Wara\Data\SendResult;
 use Bale\Wara\Data\WebhookConfig;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\GatewayException;
+use Carbon\CarbonImmutable;
+use DateTimeInterface;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
+use Throwable;
 
 /**
  * Adapter GOWA. SATU-SATUNYA kelas yang boleh menyebut nama field GOWA,
@@ -39,14 +45,24 @@ class GowaGateway implements WaraGateway
 
     protected const ERR_DEVICE_NOT_FOUND = 'DEVICE_NOT_FOUND';
 
-    public function sendText(string $deviceId, string $phone, string $text): SendResult
-    {
+    public function sendText(
+        string $deviceId,
+        string $phone,
+        string $text,
+        ?string $replyToMessageId = null,
+    ): SendResult {
+        $payload = [
+            'phone' => $phone.self::JID_SUFFIX,
+            'message' => $text,
+        ];
+
+        if ($replyToMessageId !== null) {
+            $payload['reply_message_id'] = $replyToMessageId;
+        }
+
         $response = $this->request()
             ->withHeaders([self::DEVICE_HEADER => $deviceId])
-            ->post('/send/message', [
-                'phone' => $phone.self::JID_SUFFIX,
-                'message' => $text,
-            ]);
+            ->post('/send/message', $payload);
 
         $this->throwForError($response->status(), $response->body(), $deviceId);
 
@@ -59,9 +75,14 @@ class GowaGateway implements WaraGateway
         );
     }
 
-    public function sendImage(string $deviceId, string $phone, string $imageUrl, ?string $caption = null): SendResult
-    {
-        return $this->sendMedia('/send/image', 'image_url', $imageUrl, $deviceId, $phone, $caption);
+    public function sendImage(
+        string $deviceId,
+        string $phone,
+        string $imageUrl,
+        ?string $caption = null,
+        ?string $replyToMessageId = null,
+    ): SendResult {
+        return $this->sendMedia('/send/image', 'image_url', $imageUrl, $deviceId, $phone, $caption, $replyToMessageId);
     }
 
     public function sendVideo(string $deviceId, string $phone, string $videoUrl, ?string $caption = null): SendResult
@@ -69,9 +90,143 @@ class GowaGateway implements WaraGateway
         return $this->sendMedia('/send/video', 'video_url', $videoUrl, $deviceId, $phone, $caption);
     }
 
-    public function sendDocument(string $deviceId, string $phone, string $fileUrl, ?string $caption = null): SendResult
+    public function sendDocument(
+        string $deviceId,
+        string $phone,
+        string $fileUrl,
+        ?string $caption = null,
+        ?string $replyToMessageId = null,
+    ): SendResult {
+        return $this->sendMedia('/send/file', 'file_url', $fileUrl, $deviceId, $phone, $caption, $replyToMessageId);
+    }
+
+    public function sendAudio(
+        string $deviceId,
+        string $phone,
+        string $audioUrl,
+        ?string $caption = null,
+        ?string $replyToMessageId = null,
+    ): SendResult {
+        return $this->sendMedia('/send/audio', 'audio_url', $audioUrl, $deviceId, $phone, $caption, $replyToMessageId);
+    }
+
+    /**
+     * Dua langkah: minta GOWA menyimpan media pesan, lalu ambil byte-nya.
+     *
+     * Endpoint download membalas JSON berisi `file_url` (URL statis GOWA yang
+     * sudah berbasis host request kita), bukan stream. URL itu tidak pernah
+     * keluar dari kelas ini (PRD A11.2).
+     */
+    public function downloadMedia(string $deviceId, string $messageId, string $phone): ?DownloadedMedia
     {
-        return $this->sendMedia('/send/file', 'file_url', $fileUrl, $deviceId, $phone, $caption);
+        $response = $this->request()
+            ->withHeaders([self::DEVICE_HEADER => $deviceId])
+            ->get('/message/'.rawurlencode($messageId).'/download?phone='.rawurlencode($phone));
+
+        $this->throwForError($response->status(), $response->body(), $deviceId);
+
+        $decoded = $this->decode($response->body());
+        $results = (array) ($decoded['results'] ?? $decoded);
+        $url = $this->stringOrNull($results['file_url'] ?? null);
+
+        if ($url === null) {
+            return null;
+        }
+
+        $file = Http::timeout((int) config('wara.timeout', 20))->get($url);
+
+        if (! $file->successful()) {
+            throw GatewayException::requestFailed($url, $file->status());
+        }
+
+        $contents = $file->body();
+        $filename = $this->stringOrNull($results['filename'] ?? null)
+            ?? basename((string) parse_url($url, PHP_URL_PATH));
+
+        return new DownloadedMedia(
+            contents: $contents,
+            filename: $filename !== '' ? $filename : 'media',
+            size: (int) ($results['file_size'] ?? strlen($contents)),
+        );
+    }
+
+    public function markRead(string $deviceId, string $messageId, string $phone): void
+    {
+        $response = $this->request()
+            ->withHeaders([self::DEVICE_HEADER => $deviceId])
+            ->post('/message/'.rawurlencode($messageId).'/read', [
+                'phone' => $phone.self::JID_SUFFIX,
+            ]);
+
+        $this->throwForError($response->status(), $response->body(), $deviceId);
+    }
+
+    public function revokeMessage(string $deviceId, string $messageId, string $phone): void
+    {
+        $this->messageAction($deviceId, $messageId, $phone, 'revoke');
+    }
+
+    public function deleteMessage(string $deviceId, string $messageId, string $phone): void
+    {
+        $this->messageAction($deviceId, $messageId, $phone, 'delete');
+    }
+
+    /** Endpoint aksi per pesan berbagi bentuk request yang sama. */
+    protected function messageAction(string $deviceId, string $messageId, string $phone, string $action): void
+    {
+        $response = $this->request()
+            ->withHeaders([self::DEVICE_HEADER => $deviceId])
+            ->post('/message/'.rawurlencode($messageId).'/'.$action, [
+                'phone' => $phone.self::JID_SUFFIX,
+            ]);
+
+        $this->throwForError($response->status(), $response->body(), $deviceId);
+    }
+
+    public function chats(string $deviceId, int $limit = 100, int $offset = 0): Collection
+    {
+        $response = $this->request()
+            ->withHeaders([self::DEVICE_HEADER => $deviceId])
+            ->get('/chats', ['limit' => $limit, 'offset' => $offset]);
+
+        $this->throwForError($response->status(), $response->body(), $deviceId);
+
+        return $this->rows($this->decode($response->body()))
+            ->map(fn (array $row) => new ChatSummary(
+                phone: $this->phoneFromJid($this->stringOrNull($row['jid'] ?? null)),
+                name: $this->stringOrNull($row['name'] ?? null),
+                lastMessageAt: $this->toDate($row['last_message_time'] ?? null),
+            ));
+    }
+
+    public function chatMessages(
+        string $deviceId,
+        string $phone,
+        ?DateTimeInterface $since = null,
+        int $limit = 100,
+        int $offset = 0,
+    ): Collection {
+        $query = ['limit' => $limit, 'offset' => $offset];
+
+        if ($since !== null) {
+            $query['start_time'] = CarbonImmutable::instance($since)->toIso8601String();
+        }
+
+        $response = $this->request()
+            ->withHeaders([self::DEVICE_HEADER => $deviceId])
+            ->get('/chat/'.rawurlencode($phone.self::JID_SUFFIX).'/messages', $query);
+
+        $this->throwForError($response->status(), $response->body(), $deviceId);
+
+        return $this->rows($this->decode($response->body()))
+            ->map(fn (array $row) => new ChatMessage(
+                id: (string) ($row['id'] ?? ''),
+                body: (string) ($row['content'] ?? ''),
+                timestamp: $this->toDate($row['timestamp'] ?? null),
+                isFromMe: (bool) ($row['is_from_me'] ?? false),
+                mediaType: $this->stringOrNull($row['media_type'] ?? null),
+                mediaName: $this->stringOrNull($row['filename'] ?? null),
+            ));
     }
 
     /**
@@ -87,15 +242,23 @@ class GowaGateway implements WaraGateway
         string $deviceId,
         string $phone,
         ?string $caption,
+        ?string $replyToMessageId = null,
     ): SendResult {
-        $response = $this->request()
+        $fields = [
+            'phone' => $phone.self::JID_SUFFIX,
+            $urlField => $mediaUrl,
+            'caption' => (string) ($caption ?? ''),
+        ];
+
+        // GOWA mem-bind field form; `reply_message_id` kosong akan ditolak.
+        if ($replyToMessageId !== null) {
+            $fields['reply_message_id'] = $replyToMessageId;
+        }
+
+        $response = $this->request(json: false)
             ->asMultipart()
             ->withHeaders([self::DEVICE_HEADER => $deviceId])
-            ->post($path, [
-                'phone' => $phone.self::JID_SUFFIX,
-                $urlField => $mediaUrl,
-                'caption' => (string) ($caption ?? ''),
-            ]);
+            ->post($path, $fields);
 
         $this->throwForError($response->status(), $response->body(), $deviceId);
 
@@ -299,7 +462,7 @@ class GowaGateway implements WaraGateway
         return hash_equals($expected, $signatureHeader);
     }
 
-    protected function request(): PendingRequest
+    protected function request(bool $json = true): PendingRequest
     {
         $endpoint = rtrim((string) config('wara.endpoint'), '/');
 
@@ -307,10 +470,13 @@ class GowaGateway implements WaraGateway
             throw GatewayException::unreachable('(WARA_ENDPOINT kosong)');
         }
 
-        return Http::baseUrl($endpoint)
-            ->asJson()
+        $request = Http::baseUrl($endpoint)
             ->timeout((int) config('wara.timeout', 20))
             ->withBasicAuth(...$this->basicAuthParts());
+
+        // `asJson()` juga menulis header Content-Type. Kalau request multipart
+        // memakainya, GOWA mem-parse body sebagai JSON dan menolak boundary `--`.
+        return $json ? $request->asJson() : $request;
     }
 
     /**
@@ -387,6 +553,63 @@ class GowaGateway implements WaraGateway
         return collect($decoded)->map(fn ($row) => (array) $row)->values();
     }
 
+    /**
+     * Baris `results.data` pada respons chat GOWA.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    protected function rows(array $decoded): Collection
+    {
+        $rows = data_get($decoded, 'results.data');
+
+        if (! is_array($rows)) {
+            return collect();
+        }
+
+        return collect($rows)->map(fn ($row) => (array) $row)->values();
+    }
+
+    /**
+     * Nomor dari JID percakapan; NULL untuk grup/newsletter/broadcast.
+     */
+    protected function phoneFromJid(?string $jid): ?string
+    {
+        if ($jid === null) {
+            return null;
+        }
+
+        $at = strpos($jid, '@');
+        $suffix = $at === false ? '' : strtolower(substr($jid, $at));
+
+        if ($suffix !== '' && $suffix !== self::JID_SUFFIX) {
+            return null;
+        }
+
+        $user = $at === false ? $jid : substr($jid, 0, $at);
+        $colon = strpos($user, ':');
+
+        if ($colon !== false) {
+            $user = substr($user, 0, $colon);
+        }
+
+        $user = trim($user);
+
+        return $user === '' ? null : $user;
+    }
+
+    protected function toDate(mixed $value): ?CarbonImmutable
+    {
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return CarbonImmutable::parse($value);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     protected function toDeviceInfo(array $row): DeviceInfo
     {
         return new DeviceInfo(
@@ -438,7 +661,9 @@ class GowaGateway implements WaraGateway
     {
         $payload = [
             'webhook_url' => (string) ($webhook->url ?? ''),
-            'webhook_events' => array_values($webhook->events),
+            // GOWA menerima daftar event sebagai satu string berkoma, bukan
+            // array; array ditolak dengan 400 dan konfigurasi tidak tersimpan.
+            'webhook_events' => implode(',', $webhook->events),
             'webhook_insecure_skip_verify' => $webhook->insecureSkipVerify,
         ];
 
@@ -455,6 +680,10 @@ class GowaGateway implements WaraGateway
     protected function toWebhookConfig(array $results): WebhookConfig
     {
         $events = $results['webhook_events'] ?? [];
+
+        if (is_string($events)) {
+            $events = array_filter(array_map('trim', explode(',', $events)), fn ($event) => $event !== '');
+        }
 
         return new WebhookConfig(
             url: $this->stringOrNull($results['webhook_url'] ?? null),

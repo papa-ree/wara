@@ -351,6 +351,16 @@ class Form extends Component
             explode(',', (string) $this->webhookEvents)
         )));
 
+        // GOWA mengosongkan URL device bila dikirim string kosong, dan device
+        // langsung jatuh ke webhook global. Tanpa nilai hasil "Muat", simpan
+        // akan menghapus webhook yang sedang dipakai — pesan masuk berhenti
+        // padahal kirim tetap jalan.
+        if (! $this->webhookLoaded && ! filled($this->webhookUrl)) {
+            $this->dispatch('toast', type: 'error', message: __('Muat konfigurasi webhook dulu supaya URL tidak terhapus.'));
+
+            return;
+        }
+
         try {
             $saved = app(WaraManager::class)->gateway()->setWebhook(
                 $this->session->device_id,

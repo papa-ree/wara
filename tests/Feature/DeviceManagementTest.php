@@ -285,7 +285,7 @@ describe('webhook per-device', function () {
                     'device_id' => 'wara-1',
                     'webhook_url' => 'https://contoh.test/hook',
                     'webhook_secret' => 'rahasia-lama',
-                    'webhook_events' => ['message'],
+                    'webhook_events' => 'message',
                     'webhook_insecure_skip_verify' => false,
                 ],
             ], 200),
@@ -309,7 +309,7 @@ describe('webhook per-device', function () {
                 'results' => [
                     'device_id' => 'wara-1',
                     'webhook_url' => 'https://contoh.test/hook',
-                    'webhook_events' => ['message', 'message.ack'],
+                    'webhook_events' => 'message,message.ack',
                     'webhook_insecure_skip_verify' => false,
                     'webhook_secret' => 'rahasia-baru',
                 ],
@@ -329,8 +329,21 @@ describe('webhook per-device', function () {
 
         Http::assertSent(fn ($request) => $request->method() === 'PATCH'
             && $request['webhook_url'] === 'https://contoh.test/hook'
-            && $request['webhook_events'] === ['message', 'message.ack']
+            && $request['webhook_events'] === 'message,message.ack'
             && $request['webhook_secret'] === 'rahasia-baru');
+    });
+
+    it('menolak simpan URL kosong sebelum konfigurasi dimuat', function () {
+        Http::fake();
+
+        $session = makeManagedSession(['device_id' => 'wara-1']);
+
+        Livewire::test(DeviceForm::class, ['session' => $session])
+            ->set('webhookEvents', 'message,message.ack')
+            ->call('saveWebhook')
+            ->assertDispatched('toast', toastIs('error'));
+
+        Http::assertNotSent(fn ($request) => $request->method() === 'PATCH');
     });
 
     it('tidak mengirim secret kosong agar secret lama tidak terhapus', function () {

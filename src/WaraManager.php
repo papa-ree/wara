@@ -3,12 +3,16 @@
 namespace Bale\Wara;
 
 use Bale\Wara\Contracts\WaraGateway;
+use Bale\Wara\Data\ChatMessage;
+use Bale\Wara\Data\ChatSummary;
 use Bale\Wara\Data\DeviceList;
 use Bale\Wara\Data\DeviceState;
 use Bale\Wara\Data\DeviceStatus;
+use Bale\Wara\Data\DownloadedMedia;
 use Bale\Wara\Data\SendResult;
 use Bale\Wara\Events\WaraDeviceDisconnected;
 use Bale\Wara\Events\WaraMessageSent;
+use Bale\Wara\Exceptions\BackoffException;
 use Bale\Wara\Exceptions\DeviceNotFoundException;
 use Bale\Wara\Exceptions\DeviceNotReadyException;
 use Bale\Wara\Exceptions\GatewayException;
@@ -23,6 +27,8 @@ use Bale\Wara\Services\TemplateRenderer;
 use Bale\Wara\Support\DeviceRouter;
 use Bale\Wara\Support\PhoneNumber;
 use Bale\Wara\Support\SendPacer;
+use DateTimeInterface;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -65,6 +71,7 @@ class WaraManager
         ?string $sessionKey = null,
         ?string $notification = null,
         ?WaraClient $client = null,
+        ?string $replyToMessageId = null,
     ): SendResult {
         $normalized = $this->phone->toInternational($phone);
 
@@ -93,7 +100,7 @@ class WaraManager
         $finalMessage = $this->applyClientBranding($client, $message);
 
         try {
-            $result = $this->gateway->sendText($session->device_id, $normalized, $finalMessage);
+            $result = $this->gateway->sendText($session->device_id, $normalized, $finalMessage, $replyToMessageId);
         } catch (GatewayException $e) {
             // Percobaan yang gagal tetap dicatat: pola restriksi harus terlihat
             // SEBELUM kejadian (PRD §10.2), bukan setelah.
@@ -240,6 +247,135 @@ class WaraManager
     }
 
     /**
+     * Kirim media dari URL. GOWA mengunduh URL itu sendiri, jadi pemanggil
+     * wajib memberi URL yang bisa dijangkau gateway (mis. URL bertanda tangan).
+     *
+     * Jenis yang didukung v1: `image`, `document`, `audio`.
+     */
+    public function sendMedia(
+        string $type,
+        string $phone,
+        string $mediaUrl,
+        ?string $caption = null,
+        ?string $deviceId = null,
+        ?string $sessionKey = null,
+        ?WaraClient $client = null,
+        ?string $notification = null,
+        ?string $replyToMessageId = null,
+    ): SendResult {
+        $normalized = $this->phone->toInternational($phone);
+
+        if ($normalized === '') {
+            throw WaraException::misconfigured('nomor tujuan', 'nomor telepon valid', $phone);
+        }
+
+        $session = $this->resolveDevice(deviceId: $deviceId, client: $client);
+
+        $this->guardDeviceBackoff($session);
+        $this->guardSessionAttempts($normalized, $sessionKey, $session);
+        $this->pacer->waitForPhoneCooldown($normalized);
+
+        $attempt = $sessionKey !== null ? $this->pacer->recordAttempt($sessionKey) : null;
+
+        $startedAt = microtime(true);
+
+        $caption = trim($this->applyClientBranding($client, (string) $caption));
+
+        try {
+            $result = match ($type) {
+                'image' => $this->gateway->sendImage($session->device_id, $normalized, $mediaUrl, $caption, $replyToMessageId),
+                'document' => $this->gateway->sendDocument($session->device_id, $normalized, $mediaUrl, $caption, $replyToMessageId),
+                'audio' => $this->gateway->sendAudio($session->device_id, $normalized, $mediaUrl, $caption, $replyToMessageId),
+                default => throw WaraException::misconfigured('jenis media', 'image, document, atau audio', $type),
+            };
+        } catch (GatewayException $e) {
+            $this->markDeviceBackoff($session);
+
+            $this->recordOutgoing($session, $normalized, $caption, $sessionKey, $attempt, SendResult::rejected(
+                'GATEWAY_ERROR',
+                $e->getMessage()
+            ), $client, null);
+
+            throw $e;
+        }
+
+        $this->pacer->recordSend($normalized, $attempt);
+        $this->pacer->clearDeviceBackoff($session->device_id);
+
+        $latencyMs = (int) round((microtime(true) - $startedAt) * 1000);
+
+        $this->recordOutgoing($session, $normalized, $caption, $sessionKey, $attempt, $result, $client, $latencyMs);
+
+        WaraMessageSent::dispatch(
+            destination: $normalized,
+            deviceId: $session->device_id,
+            messageId: $result->messageId,
+            latencyMs: $latencyMs,
+            notification: $notification,
+        );
+
+        return $result;
+    }
+
+    /**
+     * Unduh media pesan masuk lewat gateway.
+     *
+     * Tidak memakai `resolveDevice()`: mengunduh tidak butuh device yang siap
+     * mengirim, dan `deviceId` sudah datang dari webhook pesan itu sendiri.
+     */
+    public function downloadMedia(string $deviceId, string $messageId, string $phone): ?DownloadedMedia
+    {
+        return $this->gateway->downloadMedia($deviceId, $messageId, $phone);
+    }
+
+    /**
+     * Kirim tanda dibaca untuk pesan masuk lewat gateway.
+     *
+     * Tidak memakai `resolveDevice()`: `deviceId` sudah milik pesan itu.
+     */
+    public function markRead(string $deviceId, string $messageId, string $phone): void
+    {
+        $this->gateway->markRead($deviceId, $messageId, $phone);
+    }
+
+    /** "Hapus untuk semua": tarik pesan dari semua peserta. */
+    public function revokeMessage(string $deviceId, string $messageId, string $phone): void
+    {
+        $this->gateway->revokeMessage($deviceId, $messageId, $phone);
+    }
+
+    /** "Hapus untuk saya": hapus pesan dari akun ini saja. */
+    public function deleteMessage(string $deviceId, string $messageId, string $phone): void
+    {
+        $this->gateway->deleteMessage($deviceId, $messageId, $phone);
+    }
+
+    /**
+     * Riwayat chat yang tersimpan di gateway, satu halaman.
+     *
+     * @return Collection<int, ChatSummary>
+     */
+    public function chats(string $deviceId, int $limit = 100, int $offset = 0): Collection
+    {
+        return $this->gateway->chats($deviceId, $limit, $offset);
+    }
+
+    /**
+     * Pesan satu percakapan dari chat storage gateway, terbaru lebih dulu.
+     *
+     * @return Collection<int, ChatMessage>
+     */
+    public function chatMessages(
+        string $deviceId,
+        string $phone,
+        ?DateTimeInterface $since = null,
+        int $limit = 100,
+        int $offset = 0,
+    ): Collection {
+        return $this->gateway->chatMessages($deviceId, $phone, $since, $limit, $offset);
+    }
+
+    /**
      * Backoff device: jangan mencoba ulang berkali-kali dalam waktu singkat
      * (PRD §8.2). Itu menghasilkan daftar device yang `disconnected`/`connecting`
      * terus, dan memboros request.
@@ -252,10 +388,7 @@ class WaraManager
             return;
         }
 
-        throw WaraException::misconfigured(
-            sprintf('device %s (masih dalam backoff %d detik)', $session->device_id, $remaining),
-            sprintf('tunggu %d detik sebelum mencoba lagi', $remaining)
-        );
+        throw BackoffException::forDevice($session->device_id, $remaining);
     }
 
     protected function markDeviceBackoff(WaraSession $session): void

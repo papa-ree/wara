@@ -1,6 +1,7 @@
 <?php
 
 use Bale\Wara\Events\WaraIncomingMessage;
+use Bale\Wara\Events\WaraMessageAck;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -59,6 +60,29 @@ describe('event WaraIncomingMessage (TOPIK §7)', function () {
         ])->assertOk();
 
         Event::assertNotDispatched(WaraIncomingMessage::class);
+    });
+
+    it('memancarkan WaraMessageAck untuk message.ack', function () {
+        Event::fake([WaraMessageAck::class]);
+
+        $body = json_encode([
+            'event' => 'message.ack',
+            'device_id' => 'dev-1',
+            'payload' => [
+                'ids' => ['msg-1', 'msg-2'],
+                'chat_id' => '628123456789@s.whatsapp.net',
+                'receipt_type' => 'read',
+            ],
+        ]);
+
+        $this->postJson('/api/wara/webhook', json_decode($body, true), [
+            'X-Hub-Signature-256' => 'sha256='.hash_hmac('sha256', $body, 'rahasia-webhook'),
+        ])->assertOk();
+
+        Event::assertDispatched(WaraMessageAck::class, fn (WaraMessageAck $event) => $event->deviceId === 'dev-1'
+            && $event->messageIds === ['msg-1', 'msg-2']
+            && $event->receiptType === 'read'
+            && $event->phone === '628123456789');
     });
 
     it('TIDAK dipancarkan untuk event lain', function () {
@@ -157,6 +181,25 @@ describe('event WaraIncomingMessage (TOPIK §7)', function () {
         });
     });
 
+    it('meneruskan kutipan balasan dan mengosongkannya untuk pesan biasa', function () {
+        Event::fake([WaraIncomingMessage::class]);
+
+        foreach ([
+            [['id' => 'msg-2', 'replied_to_id' => 'msg-1', 'quoted_body' => 'halo'], 'msg-1', 'halo'],
+            [['id' => 'msg-3'], null, null],
+        ] as [$payload, $repliedToId, $quotedBody]) {
+            $body = incomingBody($payload);
+
+            $this->postJson('/api/wara/webhook', json_decode($body, true), [
+                'X-Hub-Signature-256' => 'sha256='.hash_hmac('sha256', $body, 'rahasia-webhook'),
+            ])->assertOk();
+
+            Event::assertDispatched(WaraIncomingMessage::class, fn (WaraIncomingMessage $event) => $event->messageId === $payload['id']
+                && $event->repliedToId === $repliedToId
+                && $event->quotedBody === $quotedBody);
+        }
+    });
+
     it('baris wara_logs tetap tersimpan walau listener melempar', function () {
         Event::listen(WaraIncomingMessage::class, function () {
             throw new RuntimeException('listener gagal');
@@ -218,5 +261,86 @@ describe('bantu WaraIncomingMessage', function () {
         expect($noPhone->isAddressableOneToOne())->toBeFalse()
             ->and($noBody->isAddressableOneToOne())->toBeFalse()
             ->and($blankBody->isAddressableOneToOne())->toBeFalse();
+    });
+});
+
+describe('media masuk', function () {
+    it('menormalkan media path dari payload webhook', function () {
+        Event::fake([WaraIncomingMessage::class]);
+
+        $body = incomingBody([
+            'body' => null,
+            'image' => 'statics/media/1752404751-foto.jpeg',
+        ]);
+
+        $this->postJson('/api/wara/webhook', json_decode($body, true), [
+            'X-Hub-Signature-256' => 'sha256='.hash_hmac('sha256', $body, 'rahasia-webhook'),
+        ])->assertOk();
+
+        Event::assertDispatched(WaraIncomingMessage::class, function (WaraIncomingMessage $event) {
+            return $event->mediaType() === 'image'
+                && $event->media['filename'] === '1752404751-foto.jpeg'
+                && $event->isAddressableOneToOne();
+        });
+    });
+
+    it('menormalkan media dengan caption dan nama dokumen', function () {
+        Event::fake([WaraIncomingMessage::class]);
+
+        $body = incomingBody([
+            'body' => 'Laporan bulanan',
+            'document' => ['url' => 'https://mmg.whatsapp.net/x', 'filename' => 'laporan.pdf', 'caption' => 'Laporan bulanan'],
+        ]);
+
+        $this->postJson('/api/wara/webhook', json_decode($body, true), [
+            'X-Hub-Signature-256' => 'sha256='.hash_hmac('sha256', $body, 'rahasia-webhook'),
+        ])->assertOk();
+
+        Event::assertDispatched(WaraIncomingMessage::class, function (WaraIncomingMessage $event) {
+            return $event->mediaType() === 'document'
+                && $event->media['filename'] === 'laporan.pdf'
+                && $event->media['caption'] === 'Laporan bulanan'
+                && $event->body === 'Laporan bulanan';
+        });
+    });
+});
+
+describe('pesan dari device sendiri', function () {
+    it('menandai is_from_me dan memakai chat_id sebagai lawan bicara', function () {
+        Event::fake([WaraIncomingMessage::class]);
+
+        $body = incomingBody([
+            'from' => '628000000001:12@s.whatsapp.net',
+            'chat_id' => '628123456789@s.whatsapp.net',
+            'is_from_me' => true,
+            'body' => 'dari hp',
+        ]);
+
+        $this->postJson('/api/wara/webhook', json_decode($body, true), [
+            'X-Hub-Signature-256' => 'sha256='.hash_hmac('sha256', $body, 'rahasia-webhook'),
+        ])->assertOk();
+
+        Event::assertDispatched(WaraIncomingMessage::class, function (WaraIncomingMessage $event) {
+            return $event->isFromMe()
+                && $event->chatPhone() === '628123456789'
+                && $event->phone === '628000000001'
+                && ! $event->isAddressableOneToOne();
+        });
+    });
+
+    it('menolak chat yang bukan nomor telepon', function () {
+        $group = new WaraIncomingMessage(
+            'dev-1', 'message', 'm1', '628123', '120363012345678901@g.us', 'halo', '{}', null
+        );
+        $bot = new WaraIncomingMessage(
+            'dev-1', 'message', 'm2', '628123', '1807055946647698@bot', 'halo', '{}', null
+        );
+        $lid = new WaraIncomingMessage(
+            'dev-1', 'message', 'm3', '628123', '251556368777322@lid', 'halo', '{}', null
+        );
+
+        expect($group->chatPhone())->toBeNull()
+            ->and($bot->chatPhone())->toBeNull()
+            ->and($lid->chatPhone())->toBeNull();
     });
 });
