@@ -5,10 +5,10 @@ use Bale\Wara\Data\ChatSummary;
 use Bale\Wara\Exceptions\GatewayException;
 use Bale\Wara\Gateways\GowaGateway;
 use Bale\Wara\WaraServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 use Illuminate\Support\Facades\Http;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

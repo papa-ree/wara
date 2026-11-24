@@ -4,11 +4,11 @@ use Bale\Wara\Events\WaraIncomingMessage;
 use Bale\Wara\Events\WaraMessageAck;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\WaraServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

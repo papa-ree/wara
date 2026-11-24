@@ -3,6 +3,7 @@
 namespace Bale\Wara\Channels;
 
 use Bale\Wara\Exceptions\CooldownException;
+use Bale\Wara\Models\WaraClient;
 use Bale\Wara\WaraManager;
 use Illuminate\Notifications\Events\NotificationFailed;
 use Illuminate\Notifications\Notification;
@@ -77,8 +78,17 @@ class WaraChannel
 
         $startedAt = microtime(true);
 
+        $client = method_exists($notification, 'waraClient') ? $notification->waraClient() : null;
+        $purpose = method_exists($notification, 'waraPurpose') ? $notification->waraPurpose() : null;
+
         try {
-            $result = $this->wara->sendMessage($phone, $message, notification: $notification::class);
+            $result = $this->wara->sendMessage(
+                $phone,
+                $message,
+                is_string($purpose) && $purpose !== '' ? $purpose : null,
+                notification: $notification::class,
+                client: $client instanceof WaraClient ? $client : null,
+            );
         } catch (CooldownException $e) {
             // Cooldown adalah kondisi sementara, bukan kegagalan permanen.
             // `retry_after` diteruskan lewat `NotificationFailed` supaya

@@ -7,10 +7,10 @@ use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraWebhookEndpoint;
 use Bale\Wara\WaraServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 use Illuminate\Support\Facades\Queue;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

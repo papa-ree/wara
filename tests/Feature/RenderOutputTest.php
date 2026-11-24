@@ -6,12 +6,12 @@ use Bale\Wara\Livewire\Pages\Landlord\Log\Section\LogTable;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Role;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

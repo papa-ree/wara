@@ -5,11 +5,11 @@ use Bale\Core\Livewire\SharedComponents\ItemActions;
 use Bale\Wara\Livewire\Pages\Landlord\Client\Index as ClientIndex;
 use Bale\Wara\Models\WaraClient;
 use Bale\Wara\WaraServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 use Livewire\Livewire;
 use Spatie\Permission\Models\Permission;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

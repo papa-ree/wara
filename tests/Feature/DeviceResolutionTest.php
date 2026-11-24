@@ -9,9 +9,9 @@ use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraManager;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Database\UniqueConstraintViolationException;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

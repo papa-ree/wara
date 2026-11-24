@@ -18,9 +18,9 @@ namespace Bale\Wara\Tests\Feature;
 use Bale\Wara\Models\WaraLog;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraServiceProvider;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);

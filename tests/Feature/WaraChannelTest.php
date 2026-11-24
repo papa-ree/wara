@@ -4,13 +4,15 @@ use Bale\Wara\Channels\WaraChannel;
 use Bale\Wara\Contracts\WaraGateway;
 use Bale\Wara\Events\WaraMessageSent;
 use Bale\Wara\Gateways\GowaGateway;
+use Bale\Wara\Models\WaraClient;
 use Bale\Wara\Models\WaraLog;
+use Bale\Wara\Models\WaraRoute;
 use Bale\Wara\Models\WaraSession;
 use Bale\Wara\WaraManager;
 use Bale\Wara\WaraServiceProvider;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Concerns\RefreshTestDatabaseSafely;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Notifications\ChannelManager;
 use Illuminate\Notifications\Events\NotificationFailed;
@@ -21,7 +23,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Notification as NotificationFacade;
 
-uses(RefreshDatabase::class);
+uses(RefreshTestDatabaseSafely::class);
 
 beforeEach(function () {
     $this->app->register(WaraServiceProvider::class);
@@ -144,6 +146,34 @@ class WaraNoPhoneNotification extends BaseNotification
     }
 }
 
+/** Notifikasi yang membawa client + purpose sendiri. */
+class WaraClientNotification extends BaseNotification
+{
+    use Dispatchable;
+
+    public function __construct(public ?WaraClient $client = null, public ?string $purpose = null) {}
+
+    public function via(object $notifiable): array
+    {
+        return ['wara'];
+    }
+
+    public function toWara(object $notifiable): string
+    {
+        return 'Halo dari client.';
+    }
+
+    public function waraClient(): ?WaraClient
+    {
+        return $this->client;
+    }
+
+    public function waraPurpose(): ?string
+    {
+        return $this->purpose;
+    }
+}
+
 /**
  * Penangkap `NotificationFailed` berbasis array statis.
  *
@@ -251,6 +281,55 @@ describe('pengiriman lewat channel (PRD §13.2, §13.6)', function () {
             return str_contains(json_encode($body), '628123456789')
                 || str_contains(json_encode($body), '+628123456789');
         });
+    });
+});
+
+describe('client + purpose dari notification', function () {
+    it('memakai device dari route client', function () {
+        seedReadyDevice();
+
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Client Rakaca',
+            'is_active' => true,
+        ]);
+
+        WaraSession::query()->create([
+            'device_id' => 'device rakaca',
+            'jid' => '628512607000@s.whatsapp.net',
+            'display_name' => 'Rakaca Agent',
+            'is_present' => true,
+            'is_connected' => true,
+            'is_logged_in' => true,
+            'last_seen_at' => now(),
+        ]);
+
+        $route = new WaraRoute;
+        $route->forceFill([
+            'client_id' => $client->getKey(),
+            'purpose' => 'rakaca',
+            'device_id' => 'device rakaca',
+        ])->save();
+
+        NotificationFacade::route('wara', '628123456789')
+            ->notify(new WaraClientNotification($client, 'rakaca'));
+
+        Http::assertSent(fn ($request) => ($request->headers()['X-Device-Id'][0] ?? null) === 'device rakaca');
+    });
+
+    it('tidak jatuh ke default_device_id saat client tidak punya route', function () {
+        seedReadyDevice();
+
+        $client = WaraClient::query()->create([
+            'type' => WaraClient::TYPE_SERVICE,
+            'name' => 'Client Tanpa Route',
+            'is_active' => true,
+        ]);
+
+        NotificationFacade::route('wara', '628123456789')
+            ->notify(new WaraClientNotification($client, 'rakaca'));
+
+        Http::assertNothingSent();
     });
 });
 
